@@ -174,12 +174,6 @@ const ACTIONS = {
     }
 
     const mapMatch = playlistText.match(/#EXT-X-MAP:.*?URI="([^"]+)"/i);
-    if (!mapMatch) {
-      throw new Error(
-        `#EXT-X-MAP not found in playlist (${playlistUrl}):\n${playlistText.slice(0, 600)}`
-      );
-    }
-    const initUrl = new URL(mapMatch[1], playlistBase).href;
 
     const segmentUrls = playlistText
       .split(/\r?\n/)
@@ -191,16 +185,34 @@ const ACTIONS = {
       throw new Error("No media segments found in playlist");
     }
 
-    reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
+    const parts = [];
+    let bytesDownloaded = 0;
+    let outputExt = "mp4";
+    let mimeType = "video/mp4";
 
-    const initResponse = await fetchWithRetry(initUrl, {
-      label: "init segment",
-      video: videoLabel,
-    });
-    const initBuffer = await initResponse.arrayBuffer();
+    if (mapMatch) {
+      const initUrl = new URL(mapMatch[1], playlistBase).href;
 
-    const parts = [initBuffer];
-    let bytesDownloaded = initBuffer.byteLength;
+      reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
+
+      const initResponse = await fetchWithRetry(initUrl, {
+        label: "init segment",
+        video: videoLabel,
+      });
+      const initBuffer = await initResponse.arrayBuffer();
+
+      parts.push(initBuffer);
+      bytesDownloaded += initBuffer.byteLength;
+    } else {
+      outputExt = "ts";
+      mimeType = "video/mp2t";
+
+      reportHLSProgress({
+        stage: "no-init",
+        video: videoLabel,
+        message: "No #EXT-X-MAP — treating segments as plain MPEG-TS",
+      });
+    }
 
     reportHLSProgress({
       stage: "segment",
@@ -228,9 +240,10 @@ const ACTIONS = {
       });
     }
 
-    const blob = new Blob(parts, { type: "video/mp4" });
+    const blob = new Blob(parts, { type: mimeType });
     const filename = sanitizeHLSFilename(
-      step.filename || titleValue || document.title
+      step.filename || titleValue || document.title,
+      outputExt
     );
 
     reportHLSProgress({
@@ -270,7 +283,7 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function sanitizeHLSFilename(name) {
+function sanitizeHLSFilename(name, ext = "mp4") {
   let clean = String(name || "")
     .replace(/\s+/g, " ")
     .trim()
@@ -279,8 +292,8 @@ function sanitizeHLSFilename(name) {
   if (!clean) {
     clean = "video";
   }
-  if (!clean.toLowerCase().endsWith(".mp4")) {
-    clean += ".mp4";
+  if (!/\.(mp4|ts)$/i.test(clean)) {
+    clean += `.${ext}`;
   }
   return clean;
 }
