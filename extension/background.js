@@ -204,17 +204,30 @@ async function ensureOffscreenDocument() {
   });
 }
 
-async function saveFile(filename, mimeType, base64Parts) {
+async function appendChunk(sessionId, index, base64) {
   await ensureOffscreenDocument();
 
+  const response = await chrome.runtime.sendMessage({
+    type: "APPEND_CHUNK",
+    sessionId,
+    index,
+    base64,
+  });
+
+  if (!response || !response.success) {
+    throw new Error((response && response.error) || "Offscreen document failed to store a chunk");
+  }
+}
+
+async function finalizeFile(sessionId, filename, mimeType) {
   const created = await chrome.runtime.sendMessage({
-    type: "CREATE_BLOB_URL",
+    type: "FINALIZE_BLOB",
+    sessionId,
     mimeType,
-    base64Parts,
   });
 
   if (!created || !created.blobUrl) {
-    throw new Error("Offscreen document failed to create a blob URL");
+    throw new Error((created && created.error) || "Offscreen document failed to assemble the file");
   }
 
   const blobUrl = created.blobUrl;
@@ -250,8 +263,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
-  if (message.type === "SAVE_FILE") {
-    saveFile(message.filename, message.mimeType, message.base64Parts)
+  if (message.type === "SAVE_CHUNK") {
+    appendChunk(message.sessionId, message.index, message.base64)
+      .then(() => {
+        sendResponse({ success: true });
+      })
+      .catch((error) => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
+  }
+
+  if (message.type === "SAVE_FILE_FINALIZE") {
+    finalizeFile(message.sessionId, message.filename, message.mimeType)
       .then((downloadId) => {
         sendResponse({ success: true, downloadId });
       })
@@ -259,6 +283,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ success: false, error: error.message });
       });
     return true;
+  }
+
+  if (message.type === "SAVE_FILE_ABORT") {
+    chrome.runtime.sendMessage({ type: "ABORT_SESSION", sessionId: message.sessionId }).catch(() => {});
+    return undefined;
   }
 
   if (message.type !== "START_PIPELINE") {

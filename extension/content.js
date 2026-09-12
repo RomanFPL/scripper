@@ -185,101 +185,109 @@ const ACTIONS = {
       throw new Error("No media segments found in playlist");
     }
 
-    const parts = [];
     let bytesDownloaded = 0;
     let outputExt = "mp4";
     let mimeType = "video/mp4";
+    let partIndex = 0;
 
-    if (mapMatch) {
-      const initUrl = new URL(mapMatch[1], playlistBase).href;
+    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
-      reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
+    try {
+      if (mapMatch) {
+        const initUrl = new URL(mapMatch[1], playlistBase).href;
 
-      const initBuffer = await fetchWithRetry(initUrl, {
-        label: "init segment",
-        video: videoLabel,
-      });
+        reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
 
-      parts.push(initBuffer);
-      bytesDownloaded += initBuffer.byteLength;
-    } else {
-      outputExt = "ts";
-      mimeType = "video/mp2t";
+        const initBuffer = await fetchWithRetry(initUrl, {
+          label: "init segment",
+          video: videoLabel,
+        });
 
-      reportHLSProgress({
-        stage: "no-init",
-        video: videoLabel,
-        message: "No #EXT-X-MAP — treating segments as plain MPEG-TS",
-      });
-    }
+        await sendChunk(sessionId, partIndex, initBuffer);
+        partIndex++;
+        bytesDownloaded += initBuffer.byteLength;
+      } else {
+        outputExt = "ts";
+        mimeType = "video/mp2t";
 
-    reportHLSProgress({
-      stage: "segment",
-      video: videoLabel,
-      segment: 0,
-      totalSegments: segmentUrls.length,
-      bytesDownloaded,
-    });
-
-    for (let i = 0; i < segmentUrls.length; i++) {
-      const buffer = await fetchWithRetry(segmentUrls[i], {
-        label: `segment ${i + 1}/${segmentUrls.length}`,
-        video: videoLabel,
-      });
-      parts.push(buffer);
-      bytesDownloaded += buffer.byteLength;
+        reportHLSProgress({
+          stage: "no-init",
+          video: videoLabel,
+          message: "No #EXT-X-MAP — treating segments as plain MPEG-TS",
+        });
+      }
 
       reportHLSProgress({
         stage: "segment",
         video: videoLabel,
-        segment: i + 1,
+        segment: 0,
         totalSegments: segmentUrls.length,
         bytesDownloaded,
       });
-    }
 
-    const filename = sanitizeHLSFilename(
-      step.filename || titleValue || document.title,
-      outputExt
-    );
+      for (let i = 0; i < segmentUrls.length; i++) {
+        const buffer = await fetchWithRetry(segmentUrls[i], {
+          label: `segment ${i + 1}/${segmentUrls.length}`,
+          video: videoLabel,
+        });
 
-    reportHLSProgress({
-      stage: "saving",
-      video: videoLabel,
-      filename,
-      bytes: bytesDownloaded,
-    });
+        await sendChunk(sessionId, partIndex, buffer);
+        partIndex++;
+        bytesDownloaded += buffer.byteLength;
 
-    const base64Parts = parts.map(arrayBufferToBase64);
+        reportHLSProgress({
+          stage: "segment",
+          video: videoLabel,
+          segment: i + 1,
+          totalSegments: segmentUrls.length,
+          bytesDownloaded,
+        });
+      }
 
-    const saveResponse = await chrome.runtime.sendMessage({
-      type: "SAVE_FILE",
-      filename,
-      mimeType,
-      base64Parts,
-    });
-
-    if (!saveResponse || !saveResponse.success) {
-      throw new Error(
-        (saveResponse && saveResponse.error) || "chrome.downloads.download failed"
+      const filename = sanitizeHLSFilename(
+        step.filename || titleValue || document.title,
+        outputExt
       );
+
+      reportHLSProgress({
+        stage: "saving",
+        video: videoLabel,
+        filename,
+        bytes: bytesDownloaded,
+      });
+
+      const saveResponse = await chrome.runtime.sendMessage({
+        type: "SAVE_FILE_FINALIZE",
+        sessionId,
+        filename,
+        mimeType,
+      });
+
+      if (!saveResponse || !saveResponse.success) {
+        throw new Error(
+          (saveResponse && saveResponse.error) || "chrome.downloads.download failed"
+        );
+      }
+
+      reportHLSProgress({
+        stage: "done",
+        video: videoLabel,
+        filename,
+        bytes: bytesDownloaded,
+        downloadId: saveResponse.downloadId,
+      });
+
+      return {
+        filename,
+        bytes: bytesDownloaded,
+        segments: segmentUrls.length,
+        url: playlistUrl,
+        downloadId: saveResponse.downloadId,
+      };
+    } catch (err) {
+      chrome.runtime.sendMessage({ type: "SAVE_FILE_ABORT", sessionId }).catch(() => {});
+      throw err;
     }
-
-    reportHLSProgress({
-      stage: "done",
-      video: videoLabel,
-      filename,
-      bytes: bytesDownloaded,
-      downloadId: saveResponse.downloadId,
-    });
-
-    return {
-      filename,
-      bytes: bytesDownloaded,
-      segments: segmentUrls.length,
-      url: playlistUrl,
-      downloadId: saveResponse.downloadId,
-    };
   },
 };
 
@@ -375,6 +383,21 @@ async function fetchWithRetry(url, {
   }
 
   throw new Error(`${label} failed after ${retries} attempts: ${lastError.message}`);
+}
+
+async function sendChunk(sessionId, index, buffer) {
+  const response = await chrome.runtime.sendMessage({
+    type: "SAVE_CHUNK",
+    sessionId,
+    index,
+    base64: arrayBufferToBase64(buffer),
+  });
+
+  if (!response || !response.success) {
+    throw new Error(
+      (response && response.error) || "Failed to send a downloaded chunk to background.js"
+    );
+  }
 }
 
 function arrayBufferToBase64(buffer) {

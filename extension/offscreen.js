@@ -1,3 +1,5 @@
+const sessions = new Map();
+
 function base64ToUint8Array(base64) {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -14,12 +16,39 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
-  if (message.type === "CREATE_BLOB_URL") {
-    const parts = message.base64Parts.map(base64ToUint8Array);
-    const blob = new Blob(parts, { type: message.mimeType });
+  if (message.type === "APPEND_CHUNK") {
+    let chunks = sessions.get(message.sessionId);
+
+    if (!chunks) {
+      chunks = [];
+      sessions.set(message.sessionId, chunks);
+    }
+
+    chunks[message.index] = base64ToUint8Array(message.base64);
+
+    sendResponse({ success: true });
+    return true;
+  }
+
+  if (message.type === "FINALIZE_BLOB") {
+    const chunks = sessions.get(message.sessionId) || [];
+    sessions.delete(message.sessionId);
+
+    if (chunks.length === 0 || chunks.includes(undefined)) {
+      sendResponse({ error: "Missing chunks — some parts never arrived" });
+      return true;
+    }
+
+    const blob = new Blob(chunks, { type: message.mimeType });
     const blobUrl = URL.createObjectURL(blob);
+
     sendResponse({ blobUrl });
     return true;
+  }
+
+  if (message.type === "ABORT_SESSION") {
+    sessions.delete(message.sessionId);
+    return undefined;
   }
 
   if (message.type === "REVOKE_BLOB_URL") {
