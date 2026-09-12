@@ -7,7 +7,7 @@
     },
     {
       "action": "collectLinks",
-      "selector": "[data-testid=\"video-item\"].js-video-item",
+      "selector": "[data-el=\"Thumb\"]",
       "linkSelector": "a[href]",
       "saveAs": "videos"
     },

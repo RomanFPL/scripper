@@ -55,7 +55,9 @@ const ACTIONS = {
 
     return items
       .map((item, index) => {
-        const link = item.querySelector(step.linkSelector);
+        const link =
+          item.closest(step.linkSelector) ||
+          item.querySelector(step.linkSelector);
 
         if (!link) {
           return null;
