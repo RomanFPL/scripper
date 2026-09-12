@@ -15,6 +15,10 @@
     {
       "name": "Collect Video Links",
       "file": "collect-video-links.json"
+    },
+    {
+      "name": "Download HLS (current page)",
+      "file": "download-hls-test.json"
     }
   ]
 }

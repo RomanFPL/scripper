@@ -22,6 +22,39 @@ function show(message) {
       : JSON.stringify(message, null, 2);
 }
 
+function appendLine(line) {
+  output.textContent += `\n${line}`;
+  output.scrollTop = output.scrollHeight;
+}
+
+function formatHLSProgress(message) {
+  const video = message.video || "video";
+
+  if (message.stage === "segment") {
+    const mb = (message.bytesDownloaded / 1024 / 1024).toFixed(2);
+    return `[HLS] ${video}: segment ${message.segment}/${message.totalSegments} (${mb} MB)`;
+  }
+
+  if (message.stage === "retry") {
+    return `[HLS] ${video}: retry ${message.attempt}/${message.retries} for ${message.label} (${message.error})`;
+  }
+
+  if (message.stage === "done") {
+    const mb = (message.bytes / 1024 / 1024).toFixed(2);
+    return `[HLS] ${video}: saved "${message.filename}" (${mb} MB)`;
+  }
+
+  return `[HLS] ${video}: ${message.stage}`;
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== "HLS_PROGRESS") {
+    return undefined;
+  }
+
+  appendLine(formatHLSProgress(message));
+});
+
 async function loadScenarioList() {
   show("Loading scenarios...");
 

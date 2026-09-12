@@ -79,12 +79,251 @@ const ACTIONS = {
       })
       .filter(Boolean);
   },
+
+  async downloadHLS(step, variables) {
+    const titleValue = step.title || variables[step.titleVar || "title"];
+    const videoLabel = titleValue || step.url || "video";
+    let playlistUrl = step.url || variables[step.urlVar || "url"];
+
+    reportHLSProgress({ stage: "start", video: videoLabel });
+
+    if (!playlistUrl) {
+      reportHLSProgress({ stage: "detect-m3u8", video: videoLabel });
+      const found = await findM3U8Urls();
+      if (found.length === 0) {
+        throw new Error("m3u8 playlist not found on the page");
+      }
+      playlistUrl = found[0];
+    }
+
+    reportHLSProgress({ stage: "playlist", video: videoLabel, url: playlistUrl });
+
+    let playlistResponse = await fetchWithRetry(playlistUrl, {
+      label: "playlist",
+      video: videoLabel,
+    });
+    let playlistText = await playlistResponse.text();
+
+    if (!playlistText.includes("#EXTM3U")) {
+      throw new Error("Not an HLS playlist (missing #EXTM3U)");
+    }
+
+    let playlistBase = new URL("./", playlistUrl);
+
+    if (playlistText.includes("#EXT-X-STREAM-INF")) {
+      reportHLSProgress({ stage: "master-playlist", video: videoLabel });
+
+      const lines = playlistText.split(/\r?\n/);
+      let bestBandwidth = -1;
+      let bestUri = null;
+
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i].trim();
+        if (!line.startsWith("#EXT-X-STREAM-INF")) continue;
+
+        const bandwidthMatch = line.match(/BANDWIDTH=(\d+)/i);
+        const bandwidth = bandwidthMatch ? Number(bandwidthMatch[1]) : 0;
+
+        let uriLine = null;
+        for (let j = i + 1; j < lines.length; j++) {
+          const candidate = lines[j].trim();
+          if (!candidate || candidate.startsWith("#")) continue;
+          uriLine = candidate;
+          break;
+        }
+
+        if (uriLine && bandwidth >= bestBandwidth) {
+          bestBandwidth = bandwidth;
+          bestUri = uriLine;
+        }
+      }
+
+      if (!bestUri) {
+        throw new Error("Master playlist has no variant streams");
+      }
+
+      playlistUrl = new URL(bestUri, playlistBase).href;
+
+      reportHLSProgress({
+        stage: "variant-selected",
+        video: videoLabel,
+        url: playlistUrl,
+        bandwidth: bestBandwidth,
+      });
+
+      playlistResponse = await fetchWithRetry(playlistUrl, {
+        label: "media playlist",
+        video: videoLabel,
+      });
+      playlistText = await playlistResponse.text();
+      playlistBase = new URL("./", playlistUrl);
+
+      if (!playlistText.includes("#EXTM3U")) {
+        throw new Error("Selected variant is not a valid HLS playlist");
+      }
+    }
+
+    const mapMatch = playlistText.match(/#EXT-X-MAP:.*?URI="([^"]+)"/i);
+    if (!mapMatch) {
+      throw new Error("#EXT-X-MAP not found in playlist");
+    }
+    const initUrl = new URL(mapMatch[1], playlistBase).href;
+
+    const segmentUrls = playlistText
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line && !line.startsWith("#"))
+      .map((line) => new URL(line, playlistBase).href);
+
+    if (segmentUrls.length === 0) {
+      throw new Error("No media segments found in playlist");
+    }
+
+    reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
+
+    const initResponse = await fetchWithRetry(initUrl, {
+      label: "init segment",
+      video: videoLabel,
+    });
+    const initBuffer = await initResponse.arrayBuffer();
+
+    const parts = [initBuffer];
+    let bytesDownloaded = initBuffer.byteLength;
+
+    reportHLSProgress({
+      stage: "segment",
+      video: videoLabel,
+      segment: 0,
+      totalSegments: segmentUrls.length,
+      bytesDownloaded,
+    });
+
+    for (let i = 0; i < segmentUrls.length; i++) {
+      const response = await fetchWithRetry(segmentUrls[i], {
+        label: `segment ${i + 1}/${segmentUrls.length}`,
+        video: videoLabel,
+      });
+      const buffer = await response.arrayBuffer();
+      parts.push(buffer);
+      bytesDownloaded += buffer.byteLength;
+
+      reportHLSProgress({
+        stage: "segment",
+        video: videoLabel,
+        segment: i + 1,
+        totalSegments: segmentUrls.length,
+        bytesDownloaded,
+      });
+    }
+
+    const blob = new Blob(parts, { type: "video/mp4" });
+    const filename = sanitizeHLSFilename(
+      step.filename || titleValue || document.title
+    );
+
+    reportHLSProgress({
+      stage: "saving",
+      video: videoLabel,
+      filename,
+      bytes: blob.size,
+    });
+
+    const blobUrl = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+
+    reportHLSProgress({
+      stage: "done",
+      video: videoLabel,
+      filename,
+      bytes: blob.size,
+    });
+
+    return { filename, bytes: blob.size, segments: segmentUrls.length, url: playlistUrl };
+  },
 };
 
 function requireSelector(step) {
   if (typeof step.selector !== "string" || step.selector.length === 0) {
     throw new Error('Step is missing a valid "selector" string.');
   }
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function sanitizeHLSFilename(name) {
+  let clean = String(name || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[\/\\:*?"<>|]/g, "_");
+
+  if (!clean) {
+    clean = "video";
+  }
+  if (!clean.toLowerCase().endsWith(".mp4")) {
+    clean += ".mp4";
+  }
+  return clean;
+}
+
+function reportHLSProgress(data) {
+  console.log("[Video Runner][HLS]", data);
+  try {
+    chrome.runtime.sendMessage({ type: "HLS_PROGRESS", ...data });
+  } catch (err) {}
+}
+
+async function findM3U8Urls() {
+  const collect = () => {
+    const urls = performance
+      .getEntriesByType("resource")
+      .map((entry) => entry.name)
+      .filter((url) => /\.m3u8(?:[?#]|$)/i.test(url));
+    return [...new Set(urls)];
+  };
+
+  let urls = collect();
+  for (let i = 0; i < 20 && urls.length === 0; i++) {
+    await sleep(500);
+    urls = collect();
+  }
+  return urls;
+}
+
+async function fetchWithRetry(url, { label = "", video = "", retries = 3, delayMs = 1000 } = {}) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const response = await fetch(url);
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      }
+      return response;
+    } catch (err) {
+      lastError = err;
+      reportHLSProgress({
+        stage: "retry",
+        video,
+        label,
+        attempt,
+        retries,
+        error: err.message,
+      });
+      if (attempt < retries) {
+        await sleep(delayMs * attempt);
+      }
+    }
+  }
+
+  throw new Error(`${label} failed after ${retries} attempts: ${lastError.message}`);
 }
 
 async function runScenario(scenario) {
