@@ -43,7 +43,8 @@
         padding: 6px 10px;
         cursor: pointer;
       }
-      #output {
+      #output,
+      #progress {
         white-space: pre-wrap;
         background: #f5f5f5;
         border: 1px solid #ddd;
@@ -54,6 +55,9 @@
         overflow-y: auto;
         font-family: ui-monospace, monospace;
         font-size: 11px;
+      }
+      #progress {
+        margin-top: 10px;
       }
     </style>
   </head>
@@ -80,6 +84,9 @@
     </div>
 
     <div id="output">Status: idle.</div>
+
+    <label for="progress">Pipeline / download progress</label>
+    <div id="progress">No pipeline runs yet.</div>
 
     <script src="popup.js"></script>
   </body>

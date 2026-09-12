@@ -10,6 +10,7 @@ const runButton = document.getElementById("run");
 const refreshButton = document.getElementById("refreshBtn");
 const pipelineButton = document.getElementById("pipeline");
 const output = document.getElementById("output");
+const progress = document.getElementById("progress");
 const indexUrl = document.getElementById("index-url");
 
 if (indexUrl) {
@@ -21,11 +22,6 @@ function show(message) {
     typeof message === "string"
       ? message
       : JSON.stringify(message, null, 2);
-}
-
-function appendLine(line) {
-  output.textContent += `\n${line}`;
-  output.scrollTop = output.scrollHeight;
 }
 
 function formatHLSProgress(message) {
@@ -72,19 +68,42 @@ function formatPipelineStatus(message) {
   return `[Pipeline] ${message.stage}`;
 }
 
-chrome.runtime.onMessage.addListener((message) => {
-  if (!message) {
-    return undefined;
+function formatLogEntry(entry) {
+  if (entry.type === "HLS_PROGRESS") {
+    return formatHLSProgress(entry);
   }
 
-  if (message.type === "HLS_PROGRESS") {
-    appendLine(formatHLSProgress(message));
+  if (entry.type === "PIPELINE_STATUS") {
+    return formatPipelineStatus(entry);
   }
 
-  if (message.type === "PIPELINE_STATUS") {
-    appendLine(formatPipelineStatus(message));
+  return JSON.stringify(entry);
+}
+
+function renderProgressLog(log) {
+  if (!Array.isArray(log) || log.length === 0) {
+    progress.textContent = "No pipeline runs yet.";
+    return;
   }
+
+  progress.textContent = log.map(formatLogEntry).join("\n");
+  progress.scrollTop = progress.scrollHeight;
+}
+
+async function restoreProgressLog() {
+  const stored = await chrome.storage.local.get("progressLog");
+  renderProgressLog(stored.progressLog);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.progressLog) {
+    return;
+  }
+
+  renderProgressLog(changes.progressLog.newValue);
 });
+
+restoreProgressLog();
 
 async function loadScenarioList() {
   show("Loading scenarios...");

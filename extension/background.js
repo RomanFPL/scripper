@@ -6,7 +6,23 @@ chrome.runtime.onStartup.addListener(() => {
   console.log("[Video Runner] Browser startup: service worker active.");
 });
 
+const MAX_LOG_ENTRIES = 300;
+
+async function persistProgress(message) {
+  const stored = await chrome.storage.local.get("progressLog");
+  const log = Array.isArray(stored.progressLog) ? stored.progressLog : [];
+
+  log.push({ ...message, ts: Date.now() });
+
+  if (log.length > MAX_LOG_ENTRIES) {
+    log.splice(0, log.length - MAX_LOG_ENTRIES);
+  }
+
+  await chrome.storage.local.set({ progressLog: log });
+}
+
 function broadcast(message) {
+  persistProgress(message);
   chrome.runtime.sendMessage(message).catch(() => {});
 }
 
@@ -49,6 +65,7 @@ async function waitForTabComplete(tabId) {
 }
 
 async function runPipelineFirstVideo(listTabId, listScenario) {
+  await chrome.storage.local.set({ progressLog: [] });
   broadcast({ type: "PIPELINE_STATUS", stage: "collecting" });
 
   const listResponse = await sendToContentScript(listTabId, listScenario);
@@ -118,7 +135,16 @@ async function runPipelineFirstVideo(listTabId, listScenario) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== "START_PIPELINE") {
+  if (!message) {
+    return undefined;
+  }
+
+  if (message.type === "HLS_PROGRESS") {
+    persistProgress(message);
+    return undefined;
+  }
+
+  if (message.type !== "START_PIPELINE") {
     return undefined;
   }
 
