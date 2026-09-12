@@ -10,7 +10,9 @@ const runButton = document.getElementById("run");
 const output = document.getElementById("output");
 const indexUrl = document.getElementById("index-url");
 
-indexUrl.textContent = SCENARIOS_INDEX_URL;
+if (indexUrl) {
+  indexUrl.textContent = `SCENARIOS_INDEX_URL: ${SCENARIOS_INDEX_URL}`;
+}
 
 function show(message) {
   output.textContent =
@@ -43,8 +45,10 @@ async function loadScenarioList() {
 
     for (const scenario of scenarios) {
       const option = document.createElement("option");
+
       option.value = scenario.file;
       option.textContent = scenario.name;
+
       scenarioSelect.appendChild(option);
     }
 
@@ -54,11 +58,14 @@ async function loadScenarioList() {
     show(`Loaded ${scenarios.length} scenario(s).`);
   } catch (error) {
     scenarios = [];
+
     scenarioSelect.innerHTML = "";
     scenarioSelect.disabled = true;
     loadButton.disabled = true;
 
     show(`ERROR:\n${error.message}`);
+
+    console.error("[Video Runner]", error);
   }
 }
 
@@ -77,14 +84,15 @@ async function loadSelectedScenario() {
     return;
   }
 
-  const baseUrl = SCENARIOS_INDEX_URL.substring(
-    0,
-    SCENARIOS_INDEX_URL.lastIndexOf("/") + 1
-  );
+  const baseUrl =
+    SCENARIOS_INDEX_URL.substring(
+      0,
+      SCENARIOS_INDEX_URL.lastIndexOf("/") + 1
+    );
 
   const scenarioUrl = new URL(file, baseUrl).href;
 
-  show("Loading scenario...");
+  show(`Loading scenario...\n${scenarioUrl}`);
 
   try {
     const response = await fetch(scenarioUrl);
@@ -109,6 +117,8 @@ async function loadSelectedScenario() {
     runButton.disabled = true;
 
     show(`ERROR:\n${error.message}`);
+
+    console.error("[Video Runner]", error);
   }
 }
 
@@ -119,6 +129,7 @@ async function runSelectedScenario() {
   }
 
   runButton.disabled = true;
+
   show("Running scenario...");
 
   try {
@@ -147,6 +158,8 @@ async function runSelectedScenario() {
     show(response.variables);
   } catch (error) {
     show(`ERROR:\n${error.message}`);
+
+    console.error("[Video Runner]", error);
   } finally {
     runButton.disabled = false;
   }
@@ -155,10 +168,13 @@ async function runSelectedScenario() {
 scenarioSelect.addEventListener("change", () => {
   loadedScenario = null;
   runButton.disabled = true;
-  output.textContent = 'No scenario loaded. Click "Load scenario" first.';
+
+  output.textContent =
+    'No scenario loaded. Click "Load scenario" first.';
 });
 
 loadButton.addEventListener("click", loadSelectedScenario);
+
 runButton.addEventListener("click", runSelectedScenario);
 
 loadScenarioList();
