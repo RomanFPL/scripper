@@ -123,6 +123,25 @@ async function loadSelectedScenario() {
   }
 }
 
+async function sendToContentScript(tabId, scenario) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: "RUN_SCENARIO",
+      scenario,
+    });
+  } catch (error) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+
+    return await chrome.tabs.sendMessage(tabId, {
+      type: "RUN_SCENARIO",
+      scenario,
+    });
+  }
+}
+
 async function runSelectedScenario() {
   if (!loadedScenario) {
     show('No scenario loaded. Click "Load scenario" first.');
@@ -143,10 +162,7 @@ async function runSelectedScenario() {
       throw new Error("No active tab.");
     }
 
-    const response = await chrome.tabs.sendMessage(tab.id, {
-      type: "RUN_SCENARIO",
-      scenario: loadedScenario,
-    });
+    const response = await sendToContentScript(tab.id, loadedScenario);
 
     if (!response) {
       throw new Error("No response from content script.");
