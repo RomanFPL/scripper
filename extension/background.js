@@ -134,9 +134,32 @@ async function runPipelineFirstVideo(listTabId, listScenario) {
   });
 }
 
+async function ensureOffscreenDocument() {
+  if (await chrome.offscreen.hasDocument()) {
+    return;
+  }
+
+  await chrome.offscreen.createDocument({
+    url: "offscreen.html",
+    reasons: ["BLOBS"],
+    justification: "Create blob URLs for HLS video downloads",
+  });
+}
+
 async function saveFile(filename, mimeType, buffers) {
-  const blob = new Blob(buffers, { type: mimeType });
-  const blobUrl = URL.createObjectURL(blob);
+  await ensureOffscreenDocument();
+
+  const created = await chrome.runtime.sendMessage({
+    type: "CREATE_BLOB_URL",
+    mimeType,
+    buffers,
+  });
+
+  if (!created || !created.blobUrl) {
+    throw new Error("Offscreen document failed to create a blob URL");
+  }
+
+  const blobUrl = created.blobUrl;
 
   const downloadId = await chrome.downloads.download({
     url: blobUrl,
@@ -150,7 +173,7 @@ async function saveFile(filename, mimeType, buffers) {
     }
     if (delta.state.current === "complete" || delta.state.current === "interrupted") {
       chrome.downloads.onChanged.removeListener(cleanup);
-      URL.revokeObjectURL(blobUrl);
+      chrome.runtime.sendMessage({ type: "REVOKE_BLOB_URL", blobUrl }).catch(() => {});
     }
   }
 
