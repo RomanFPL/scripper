@@ -264,18 +264,37 @@ async function appendChunk(sessionId, index, base64) {
 }
 
 async function finalizeFile(sessionId, filename, mimeType) {
-  const result = await chrome.runtime.sendMessage({
+  const created = await chrome.runtime.sendMessage({
     type: "FINALIZE_BLOB",
     sessionId,
-    filename,
     mimeType,
   });
 
-  if (!result || typeof result.downloadId !== "number") {
-    throw new Error((result && result.error) || "Offscreen document failed to save the file");
+  if (!created || !created.blobUrl) {
+    throw new Error((created && created.error) || "Offscreen document failed to assemble the file");
   }
 
-  return result.downloadId;
+  const blobUrl = created.blobUrl;
+
+  const downloadId = await chrome.downloads.download({
+    url: blobUrl,
+    filename,
+    saveAs: false,
+  });
+
+  function cleanup(delta) {
+    if (delta.id !== downloadId || !delta.state) {
+      return;
+    }
+    if (delta.state.current === "complete" || delta.state.current === "interrupted") {
+      chrome.downloads.onChanged.removeListener(cleanup);
+      chrome.runtime.sendMessage({ type: "REVOKE_BLOB_URL", blobUrl }).catch(() => {});
+    }
+  }
+
+  chrome.downloads.onChanged.addListener(cleanup);
+
+  return downloadId;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
