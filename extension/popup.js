@@ -48,12 +48,42 @@ function formatHLSProgress(message) {
   return `[HLS] ${video}: ${message.stage}`;
 }
 
+function formatPipelineStatus(message) {
+  if (message.stage === "collecting") {
+    return "[Pipeline] Collecting links...";
+  }
+
+  if (message.stage === "opening") {
+    return `[Pipeline] Found ${message.total} video(s). Opening: ${message.title}`;
+  }
+
+  if (message.stage === "downloading") {
+    return `[Pipeline] Page loaded, starting HLS download: ${message.title}`;
+  }
+
+  if (message.stage === "done") {
+    return `[Pipeline] Done: ${JSON.stringify(message.result)}`;
+  }
+
+  if (message.stage === "error") {
+    return `[Pipeline] ERROR: ${message.error}`;
+  }
+
+  return `[Pipeline] ${message.stage}`;
+}
+
 chrome.runtime.onMessage.addListener((message) => {
-  if (!message || message.type !== "HLS_PROGRESS") {
+  if (!message) {
     return undefined;
   }
 
-  appendLine(formatHLSProgress(message));
+  if (message.type === "HLS_PROGRESS") {
+    appendLine(formatHLSProgress(message));
+  }
+
+  if (message.type === "PIPELINE_STATUS") {
+    appendLine(formatPipelineStatus(message));
+  }
 });
 
 async function loadScenarioList() {
@@ -216,33 +246,11 @@ async function runSelectedScenario() {
   }
 }
 
-async function waitForTabComplete(tabId) {
-  const tab = await chrome.tabs.get(tabId);
-
-  if (tab.status === "complete") {
-    return;
-  }
-
-  return new Promise((resolve) => {
-    function listener(updatedTabId, changeInfo) {
-      if (updatedTabId === tabId && changeInfo.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
-      }
-    }
-
-    chrome.tabs.onUpdated.addListener(listener);
-  });
-}
-
-async function runPipelineFirstVideo() {
+async function startPipelineFirstVideo() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
     return;
   }
-
-  pipelineButton.disabled = true;
-  show("Collecting links...");
 
   try {
     const [tab] = await chrome.tabs.query({
@@ -254,55 +262,19 @@ async function runPipelineFirstVideo() {
       throw new Error("No active tab.");
     }
 
-    const listResponse = await sendToContentScript(tab.id, loadedScenario);
+    await chrome.runtime.sendMessage({
+      type: "START_PIPELINE",
+      tabId: tab.id,
+      listScenario: loadedScenario,
+    });
 
-    if (!listResponse || !listResponse.success) {
-      throw new Error(
-        (listResponse && listResponse.error) || "Failed to collect links."
-      );
-    }
-
-    const videos = listResponse.variables.videos;
-
-    if (!Array.isArray(videos) || videos.length === 0) {
-      throw new Error("variables.videos is empty — nothing to download.");
-    }
-
-    const video = videos[0];
-
-    appendLine(`Collected ${videos.length} video(s).`);
-    appendLine(`Opening: ${video.title} (${video.url})`);
-
-    const newTab = await chrome.tabs.create({ url: video.url });
-    await waitForTabComplete(newTab.id);
-
-    appendLine("Page loaded, starting HLS download...");
-
-    const downloadScenario = {
-      name: "Download HLS (pipeline)",
-      steps: [{ action: "downloadHLS", title: video.title, saveAs: "download" }],
-    };
-
-    const downloadResponse = await sendToContentScript(
-      newTab.id,
-      downloadScenario
+    show(
+      "Pipeline started in background.js — it keeps running even if this popup closes.\nReopen the popup to see progress while it's still running."
     );
-
-    if (!downloadResponse || !downloadResponse.success) {
-      throw new Error(
-        (downloadResponse && downloadResponse.error) || "Download failed."
-      );
-    }
-
-    await chrome.tabs.remove(newTab.id);
-
-    appendLine(`Done: ${JSON.stringify(downloadResponse.variables.download)}`);
   } catch (error) {
-    appendLine(`ERROR:\n${error.message}`);
+    show(`ERROR:\n${error.message}`);
 
     console.error("[Video Runner]", error);
-  } finally {
-    pipelineButton.disabled = false;
   }
 }
 
@@ -320,6 +292,6 @@ runButton.addEventListener("click", runSelectedScenario);
 
 refreshButton.addEventListener("click", loadScenarioList);
 
-pipelineButton.addEventListener("click", runPipelineFirstVideo);
+pipelineButton.addEventListener("click", startPipelineFirstVideo);
 
 loadScenarioList();
