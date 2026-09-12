@@ -11,6 +11,10 @@
     {
       "name": "H1 Mock",
       "file": "h1-mock.json"
+    },
+    {
+      "name": "Collect Video Links",
+      "file": "collect-video-links.json"
     }
   ]
 }
