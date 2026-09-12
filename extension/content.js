@@ -93,6 +93,7 @@ const ACTIONS = {
       if (found.length === 0) {
         throw new Error("m3u8 playlist not found on the page");
       }
+      reportHLSProgress({ stage: "candidates", video: videoLabel, candidates: found });
       playlistUrl = found[0];
     }
 
@@ -104,8 +105,17 @@ const ACTIONS = {
     });
     let playlistText = await playlistResponse.text();
 
+    reportHLSProgress({
+      stage: "playlist-preview",
+      video: videoLabel,
+      url: playlistUrl,
+      preview: playlistText.slice(0, 600),
+    });
+
     if (!playlistText.includes("#EXTM3U")) {
-      throw new Error("Not an HLS playlist (missing #EXTM3U)");
+      throw new Error(
+        `Not an HLS playlist (missing #EXTM3U):\n${playlistText.slice(0, 300)}`
+      );
     }
 
     let playlistBase = new URL("./", playlistUrl);
@@ -165,7 +175,9 @@ const ACTIONS = {
 
     const mapMatch = playlistText.match(/#EXT-X-MAP:.*?URI="([^"]+)"/i);
     if (!mapMatch) {
-      throw new Error("#EXT-X-MAP not found in playlist");
+      throw new Error(
+        `#EXT-X-MAP not found in playlist (${playlistUrl}):\n${playlistText.slice(0, 600)}`
+      );
     }
     const initUrl = new URL(mapMatch[1], playlistBase).href;
 

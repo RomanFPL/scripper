@@ -8,6 +8,7 @@ const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const runButton = document.getElementById("run");
 const refreshButton = document.getElementById("refreshBtn");
+const pipelineButton = document.getElementById("pipeline");
 const output = document.getElementById("output");
 const indexUrl = document.getElementById("index-url");
 
@@ -215,6 +216,96 @@ async function runSelectedScenario() {
   }
 }
 
+async function waitForTabComplete(tabId) {
+  const tab = await chrome.tabs.get(tabId);
+
+  if (tab.status === "complete") {
+    return;
+  }
+
+  return new Promise((resolve) => {
+    function listener(updatedTabId, changeInfo) {
+      if (updatedTabId === tabId && changeInfo.status === "complete") {
+        chrome.tabs.onUpdated.removeListener(listener);
+        resolve();
+      }
+    }
+
+    chrome.tabs.onUpdated.addListener(listener);
+  });
+}
+
+async function runPipelineFirstVideo() {
+  if (!loadedScenario) {
+    show('No scenario loaded. Load "Collect Video Links" first.');
+    return;
+  }
+
+  pipelineButton.disabled = true;
+  show("Collecting links...");
+
+  try {
+    const [tab] = await chrome.tabs.query({
+      active: true,
+      currentWindow: true,
+    });
+
+    if (!tab || !tab.id) {
+      throw new Error("No active tab.");
+    }
+
+    const listResponse = await sendToContentScript(tab.id, loadedScenario);
+
+    if (!listResponse || !listResponse.success) {
+      throw new Error(
+        (listResponse && listResponse.error) || "Failed to collect links."
+      );
+    }
+
+    const videos = listResponse.variables.videos;
+
+    if (!Array.isArray(videos) || videos.length === 0) {
+      throw new Error("variables.videos is empty — nothing to download.");
+    }
+
+    const video = videos[0];
+
+    appendLine(`Collected ${videos.length} video(s).`);
+    appendLine(`Opening: ${video.title} (${video.url})`);
+
+    const newTab = await chrome.tabs.create({ url: video.url });
+    await waitForTabComplete(newTab.id);
+
+    appendLine("Page loaded, starting HLS download...");
+
+    const downloadScenario = {
+      name: "Download HLS (pipeline)",
+      steps: [{ action: "downloadHLS", title: video.title, saveAs: "download" }],
+    };
+
+    const downloadResponse = await sendToContentScript(
+      newTab.id,
+      downloadScenario
+    );
+
+    if (!downloadResponse || !downloadResponse.success) {
+      throw new Error(
+        (downloadResponse && downloadResponse.error) || "Download failed."
+      );
+    }
+
+    await chrome.tabs.remove(newTab.id);
+
+    appendLine(`Done: ${JSON.stringify(downloadResponse.variables.download)}`);
+  } catch (error) {
+    appendLine(`ERROR:\n${error.message}`);
+
+    console.error("[Video Runner]", error);
+  } finally {
+    pipelineButton.disabled = false;
+  }
+}
+
 scenarioSelect.addEventListener("change", () => {
   loadedScenario = null;
   runButton.disabled = true;
@@ -228,5 +319,7 @@ loadButton.addEventListener("click", loadSelectedScenario);
 runButton.addEventListener("click", runSelectedScenario);
 
 refreshButton.addEventListener("click", loadScenarioList);
+
+pipelineButton.addEventListener("click", runPipelineFirstVideo);
 
 loadScenarioList();
