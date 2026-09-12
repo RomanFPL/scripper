@@ -204,13 +204,13 @@ async function ensureOffscreenDocument() {
   });
 }
 
-async function saveFile(filename, mimeType, buffers) {
+async function saveFile(filename, mimeType, base64Parts) {
   await ensureOffscreenDocument();
 
   const created = await chrome.runtime.sendMessage({
     type: "CREATE_BLOB_URL",
     mimeType,
-    buffers,
+    base64Parts,
   });
 
   if (!created || !created.blobUrl) {
@@ -251,7 +251,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "SAVE_FILE") {
-    saveFile(message.filename, message.mimeType, message.buffers)
+    saveFile(message.filename, message.mimeType, message.base64Parts)
       .then((downloadId) => {
         sendResponse({ success: true, downloadId });
       })

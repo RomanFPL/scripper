@@ -99,11 +99,11 @@ const ACTIONS = {
 
     reportHLSProgress({ stage: "playlist", video: videoLabel, url: playlistUrl });
 
-    let playlistResponse = await fetchWithRetry(playlistUrl, {
+    let playlistText = await fetchWithRetry(playlistUrl, {
       label: "playlist",
       video: videoLabel,
+      as: "text",
     });
-    let playlistText = await playlistResponse.text();
 
     reportHLSProgress({
       stage: "playlist-preview",
@@ -161,11 +161,11 @@ const ACTIONS = {
         bandwidth: bestBandwidth,
       });
 
-      playlistResponse = await fetchWithRetry(playlistUrl, {
+      playlistText = await fetchWithRetry(playlistUrl, {
         label: "media playlist",
         video: videoLabel,
+        as: "text",
       });
-      playlistText = await playlistResponse.text();
       playlistBase = new URL("./", playlistUrl);
 
       if (!playlistText.includes("#EXTM3U")) {
@@ -195,11 +195,10 @@ const ACTIONS = {
 
       reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
 
-      const initResponse = await fetchWithRetry(initUrl, {
+      const initBuffer = await fetchWithRetry(initUrl, {
         label: "init segment",
         video: videoLabel,
       });
-      const initBuffer = await initResponse.arrayBuffer();
 
       parts.push(initBuffer);
       bytesDownloaded += initBuffer.byteLength;
@@ -223,11 +222,10 @@ const ACTIONS = {
     });
 
     for (let i = 0; i < segmentUrls.length; i++) {
-      const response = await fetchWithRetry(segmentUrls[i], {
+      const buffer = await fetchWithRetry(segmentUrls[i], {
         label: `segment ${i + 1}/${segmentUrls.length}`,
         video: videoLabel,
       });
-      const buffer = await response.arrayBuffer();
       parts.push(buffer);
       bytesDownloaded += buffer.byteLength;
 
@@ -252,11 +250,13 @@ const ACTIONS = {
       bytes: bytesDownloaded,
     });
 
+    const base64Parts = parts.map(arrayBufferToBase64);
+
     const saveResponse = await chrome.runtime.sendMessage({
       type: "SAVE_FILE",
       filename,
       mimeType,
-      buffers: parts,
+      base64Parts,
     });
 
     if (!saveResponse || !saveResponse.success) {
@@ -332,25 +332,41 @@ async function findM3U8Urls() {
   return urls;
 }
 
-async function fetchWithRetry(url, { label = "", video = "", retries = 3, delayMs = 1000 } = {}) {
+async function fetchWithRetry(url, {
+  label = "",
+  video = "",
+  retries = 3,
+  delayMs = 1000,
+  timeoutMs = 30000,
+  as = "arraybuffer",
+} = {}) {
   let lastError;
 
   for (let attempt = 1; attempt <= retries; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
     try {
-      const response = await fetch(url);
+      const response = await fetch(url, { signal: controller.signal });
       if (!response.ok) {
         throw new Error(`HTTP ${response.status} ${response.statusText}`);
       }
-      return response;
+      const data = as === "text" ? await response.text() : await response.arrayBuffer();
+      clearTimeout(timer);
+      return data;
     } catch (err) {
-      lastError = err;
+      clearTimeout(timer);
+      lastError = err.name === "AbortError"
+        ? new Error(`Timed out after ${timeoutMs}ms`)
+        : err;
+
       reportHLSProgress({
         stage: "retry",
         video,
         label,
         attempt,
         retries,
-        error: err.message,
+        error: lastError.message,
       });
       if (attempt < retries) {
         await sleep(delayMs * attempt);
@@ -359,6 +375,18 @@ async function fetchWithRetry(url, { label = "", video = "", retries = 3, delayM
   }
 
   throw new Error(`${label} failed after ${retries} attempts: ${lastError.message}`);
+}
+
+function arrayBufferToBase64(buffer) {
+  const bytes = new Uint8Array(buffer);
+  const chunkSize = 0x8000;
+  let binary = "";
+
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+
+  return btoa(binary);
 }
 
 async function runScenario(scenario) {
