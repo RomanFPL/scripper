@@ -1,0 +1,19 @@
+{
+  "name": "Collect Video Links",
+  "steps": [
+    {
+      "action": "log",
+      "message": "Collecting video links..."
+    },
+    {
+      "action": "collectLinks",
+      "selector": "[data-testid=\"video-item\"].js-video-item",
+      "linkSelector": "a[href]",
+      "saveAs": "videos"
+    },
+    {
+      "action": "log",
+      "message": "Video links collected"
+    }
+  ]
+}

@@ -1,0 +1,23 @@
+{
+  "name": "Click & Text Demo",
+  "steps": [
+    {
+      "action": "log",
+      "message": "Looking for the first <a> link on the page"
+    },
+    {
+      "action": "query",
+      "selector": "a",
+      "saveAs": "firstLink"
+    },
+    {
+      "action": "getText",
+      "selector": "a",
+      "saveAs": "firstLinkText"
+    },
+    {
+      "action": "log",
+      "message": "Done reading the link text"
+    }
+  ]
+}

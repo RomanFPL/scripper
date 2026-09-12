@@ -1,0 +1,16 @@
+{
+  "scenarios": [
+    {
+      "name": "Test Video Runner",
+      "file": "test-scenario.json"
+    },
+    {
+      "name": "Click & Text Demo",
+      "file": "click-demo.json"
+    },
+    {
+      "name": "H1 Mock",
+      "file": "h1-mock.json"
+    }
+  ]
+}

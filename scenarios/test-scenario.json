@@ -1,0 +1,21 @@
+{
+  "name": "Test Video Runner",
+  "steps": [
+    {
+      "action": "log",
+      "message": "Hello from remote scenario!"
+    },
+    {
+      "action": "getPageTitle",
+      "saveAs": "title"
+    },
+    {
+      "action": "log",
+      "message": "Scenario loaded successfully"
+    },
+    {
+      "action": "wait",
+      "ms": 1000
+    }
+  ]
+}

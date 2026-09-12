@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "Video Runner",
+  "version": "0.1.0",
+  "description": "Static browser-extension runner that executes a scenario loaded from a remote JSON file using a fixed set of built-in actions. No remote code is ever executed.",
+
+  "permissions": ["storage", "tabs", "scripting"],
+  "host_permissions": ["<all_urls>"],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Video Runner"
+  }
+}
