@@ -49,16 +49,28 @@ function formatPipelineStatus(message) {
     return "[Pipeline] Collecting links...";
   }
 
+  if (message.stage === "collected") {
+    return `[Pipeline] Collected ${message.total} video(s). Starting downloads...`;
+  }
+
   if (message.stage === "opening") {
-    return `[Pipeline] Found ${message.total} video(s). Opening: ${message.title}`;
+    return `[Pipeline] (${message.index}/${message.total}) Opening: ${message.title}`;
   }
 
   if (message.stage === "downloading") {
-    return `[Pipeline] Page loaded, starting HLS download: ${message.title}`;
+    return `[Pipeline] (${message.index}/${message.total}) Page loaded, downloading: ${message.title}`;
+  }
+
+  if (message.stage === "video-done") {
+    return `[Pipeline] (${message.index}/${message.total}) ✅ ${message.title}`;
+  }
+
+  if (message.stage === "video-error") {
+    return `[Pipeline] (${message.index}/${message.total}) ❌ ${message.title}: ${message.error}`;
   }
 
   if (message.stage === "done") {
-    return `[Pipeline] Done: ${JSON.stringify(message.result)}`;
+    return `[Pipeline] All done: ${message.succeeded}/${message.total} succeeded, ${message.failed} failed.`;
   }
 
   if (message.stage === "error") {
@@ -105,6 +117,20 @@ chrome.storage.onChanged.addListener((changes, area) => {
 
 restoreProgressLog();
 
+async function persistScenarioState() {
+  await chrome.storage.local.set({
+    scenarioState: {
+      selectedFile: scenarioSelect.value,
+      loadedScenario,
+    },
+  });
+}
+
+async function restoreScenarioState() {
+  const stored = await chrome.storage.local.get("scenarioState");
+  return stored.scenarioState || null;
+}
+
 async function loadScenarioList() {
   show("Loading scenarios...");
 
@@ -139,7 +165,29 @@ async function loadScenarioList() {
     scenarioSelect.disabled = scenarios.length === 0;
     loadButton.disabled = scenarios.length === 0;
 
-    show(`Loaded ${scenarios.length} scenario(s).`);
+    const savedState = await restoreScenarioState();
+
+    if (
+      savedState &&
+      savedState.selectedFile &&
+      scenarios.some((scenario) => scenario.file === savedState.selectedFile)
+    ) {
+      scenarioSelect.value = savedState.selectedFile;
+
+      if (
+        savedState.loadedScenario &&
+        savedState.loadedScenario.__file === savedState.selectedFile
+      ) {
+        loadedScenario = savedState.loadedScenario;
+        runButton.disabled = false;
+      }
+    }
+
+    if (loadedScenario) {
+      show(loadedScenario);
+    } else {
+      show(`Loaded ${scenarios.length} scenario(s).`);
+    }
   } catch (error) {
     scenarios = [];
 
@@ -193,9 +241,13 @@ async function loadSelectedScenario() {
       throw new Error("Scenario must contain a steps array.");
     }
 
+    loadedScenario.__file = file;
+
     runButton.disabled = false;
 
     show(loadedScenario);
+
+    await persistScenarioState();
   } catch (error) {
     loadedScenario = null;
     runButton.disabled = true;
@@ -265,7 +317,7 @@ async function runSelectedScenario() {
   }
 }
 
-async function startPipelineFirstVideo() {
+async function startPipelineAllVideos() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
     return;
@@ -303,6 +355,8 @@ scenarioSelect.addEventListener("change", () => {
 
   output.textContent =
     'No scenario loaded. Click "Load scenario" first.';
+
+  persistScenarioState();
 });
 
 loadButton.addEventListener("click", loadSelectedScenario);
@@ -311,6 +365,6 @@ runButton.addEventListener("click", runSelectedScenario);
 
 refreshButton.addEventListener("click", loadScenarioList);
 
-pipelineButton.addEventListener("click", startPipelineFirstVideo);
+pipelineButton.addEventListener("click", startPipelineAllVideos);
 
 loadScenarioList();

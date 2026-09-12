@@ -45,26 +45,110 @@ async function sendToContentScript(tabId, scenario) {
   }
 }
 
-async function waitForTabComplete(tabId) {
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function waitForTabComplete(tabId, timeoutMs = 30000) {
   const tab = await chrome.tabs.get(tabId);
 
   if (tab.status === "complete") {
     return;
   }
 
-  return new Promise((resolve) => {
+  await new Promise((resolve) => {
+    let done = false;
+
+    function finish() {
+      if (done) return;
+      done = true;
+      chrome.tabs.onUpdated.removeListener(listener);
+      clearTimeout(timer);
+      resolve();
+    }
+
     function listener(updatedTabId, changeInfo) {
       if (updatedTabId === tabId && changeInfo.status === "complete") {
-        chrome.tabs.onUpdated.removeListener(listener);
-        resolve();
+        finish();
       }
     }
 
+    const timer = setTimeout(finish, timeoutMs);
     chrome.tabs.onUpdated.addListener(listener);
   });
 }
 
-async function runPipelineFirstVideo(listTabId, listScenario) {
+async function downloadOneVideo(video, index, total) {
+  broadcast({
+    type: "PIPELINE_STATUS",
+    stage: "opening",
+    index,
+    total,
+    title: video.title,
+    url: video.url,
+  });
+
+  let newTab;
+
+  try {
+    newTab = await chrome.tabs.create({ url: video.url, active: false });
+    await waitForTabComplete(newTab.id);
+
+    broadcast({
+      type: "PIPELINE_STATUS",
+      stage: "downloading",
+      index,
+      total,
+      title: video.title,
+    });
+
+    const downloadScenario = {
+      name: "Download HLS (pipeline)",
+      steps: [
+        { action: "downloadHLS", title: video.title, saveAs: "download" },
+      ],
+    };
+
+    const downloadResponse = await sendToContentScript(
+      newTab.id,
+      downloadScenario
+    );
+
+    if (!downloadResponse || !downloadResponse.success) {
+      throw new Error(
+        (downloadResponse && downloadResponse.error) || "Download failed."
+      );
+    }
+
+    broadcast({
+      type: "PIPELINE_STATUS",
+      stage: "video-done",
+      index,
+      total,
+      title: video.title,
+      result: downloadResponse.variables.download,
+    });
+
+    return { title: video.title, url: video.url, success: true };
+  } catch (error) {
+    broadcast({
+      type: "PIPELINE_STATUS",
+      stage: "video-error",
+      index,
+      total,
+      title: video.title,
+      error: error.message,
+    });
+
+    return { title: video.title, url: video.url, success: false, error: error.message };
+  } finally {
+    if (newTab) {
+      await chrome.tabs.remove(newTab.id).catch(() => {});
+    }
+  }
+}
+
+async function runPipelineAllVideos(listTabId, listScenario) {
   await chrome.storage.local.set({ progressLog: [] });
   broadcast({ type: "PIPELINE_STATUS", stage: "collecting" });
 
@@ -82,55 +166,29 @@ async function runPipelineFirstVideo(listTabId, listScenario) {
     throw new Error("variables.videos is empty — nothing to download.");
   }
 
-  const video = videos[0];
+  broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
 
-  broadcast({
-    type: "PIPELINE_STATUS",
-    stage: "opening",
-    total: videos.length,
-    title: video.title,
-    url: video.url,
-  });
+  const results = [];
 
-  const newTab = await chrome.tabs.create({ url: video.url, active: false });
-  await waitForTabComplete(newTab.id);
+  for (let i = 0; i < videos.length; i++) {
+    const result = await downloadOneVideo(videos[i], i + 1, videos.length);
+    results.push(result);
 
-  broadcast({
-    type: "PIPELINE_STATUS",
-    stage: "downloading",
-    title: video.title,
-  });
-
-  const downloadScenario = {
-    name: "Download HLS (pipeline)",
-    steps: [
-      { action: "downloadHLS", title: video.title, saveAs: "download" },
-    ],
-  };
-
-  const downloadResponse = await sendToContentScript(
-    newTab.id,
-    downloadScenario
-  );
-
-  if (!downloadResponse || !downloadResponse.success) {
-    broadcast({
-      type: "PIPELINE_STATUS",
-      stage: "error",
-      title: video.title,
-      error: (downloadResponse && downloadResponse.error) || "Download failed.",
-      tabId: newTab.id,
-    });
-    return;
+    if (i < videos.length - 1) {
+      await sleep(1000);
+    }
   }
 
-  await chrome.tabs.remove(newTab.id);
+  const succeeded = results.filter((r) => r.success).length;
+  const failed = results.length - succeeded;
 
   broadcast({
     type: "PIPELINE_STATUS",
     stage: "done",
-    title: video.title,
-    result: downloadResponse.variables.download,
+    total: videos.length,
+    succeeded,
+    failed,
+    results,
   });
 }
 
@@ -207,7 +265,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
-  runPipelineFirstVideo(message.tabId, message.listScenario).catch((error) => {
+  runPipelineAllVideos(message.tabId, message.listScenario).catch((error) => {
     broadcast({ type: "PIPELINE_STATUS", stage: "error", error: error.message });
   });
 
