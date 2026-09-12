@@ -9,6 +9,8 @@ const loadButton = document.getElementById("load");
 const runButton = document.getElementById("run");
 const refreshButton = document.getElementById("refreshBtn");
 const pipelineButton = document.getElementById("pipeline");
+const pauseButton = document.getElementById("pause");
+const stopButton = document.getElementById("stop");
 const output = document.getElementById("output");
 const progress = document.getElementById("progress");
 const indexUrl = document.getElementById("index-url");
@@ -71,6 +73,22 @@ function formatPipelineStatus(message) {
 
   if (message.stage === "done") {
     return `[Pipeline] All done: ${message.succeeded}/${message.total} succeeded, ${message.failed} failed.`;
+  }
+
+  if (message.stage === "stopped") {
+    return `[Pipeline] Stopped after ${message.processed}/${message.total} video(s): ${message.succeeded} succeeded, ${message.failed} failed.`;
+  }
+
+  if (message.stage === "paused") {
+    return "[Pipeline] ⏸ Paused (will finish the current video, then wait).";
+  }
+
+  if (message.stage === "resumed") {
+    return "[Pipeline] ▶ Resumed.";
+  }
+
+  if (message.stage === "stopping") {
+    return "[Pipeline] ⏹ Stopping...";
   }
 
   if (message.stage === "error") {
@@ -339,6 +357,8 @@ async function startPipelineAllVideos() {
       listScenario: loadedScenario,
     });
 
+    await applyPipelineState({ running: true, paused: false });
+
     show(
       "Pipeline started in background.js — it keeps running even if this popup closes.\nReopen the popup to see progress while it's still running."
     );
@@ -348,6 +368,43 @@ async function startPipelineAllVideos() {
     console.error("[Video Runner]", error);
   }
 }
+
+function applyPipelineState(state) {
+  const running = Boolean(state && state.running);
+  const paused = Boolean(state && state.paused);
+
+  pauseButton.disabled = !running;
+  stopButton.disabled = !running;
+  pauseButton.textContent = paused ? "Resume" : "Pause";
+}
+
+async function togglePause() {
+  const stored = await chrome.storage.local.get("pipelineState");
+  const paused = Boolean(stored.pipelineState && stored.pipelineState.paused);
+
+  await chrome.runtime.sendMessage({
+    type: paused ? "PIPELINE_RESUME" : "PIPELINE_PAUSE",
+  });
+}
+
+async function stopPipeline() {
+  await chrome.runtime.sendMessage({ type: "PIPELINE_STOP" });
+}
+
+async function restorePipelineState() {
+  const stored = await chrome.storage.local.get("pipelineState");
+  applyPipelineState(stored.pipelineState);
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local" || !changes.pipelineState) {
+    return;
+  }
+
+  applyPipelineState(changes.pipelineState.newValue);
+});
+
+restorePipelineState();
 
 scenarioSelect.addEventListener("change", () => {
   loadedScenario = null;
@@ -366,5 +423,9 @@ runButton.addEventListener("click", runSelectedScenario);
 refreshButton.addEventListener("click", loadScenarioList);
 
 pipelineButton.addEventListener("click", startPipelineAllVideos);
+
+pauseButton.addEventListener("click", togglePause);
+
+stopButton.addEventListener("click", stopPipeline);
 
 loadScenarioList();

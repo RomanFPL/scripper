@@ -26,6 +26,12 @@ function broadcast(message) {
   chrome.runtime.sendMessage(message).catch(() => {});
 }
 
+async function setPipelineState(partial) {
+  const stored = await chrome.storage.local.get("pipelineState");
+  const current = stored.pipelineState || { running: false, paused: false };
+  await chrome.storage.local.set({ pipelineState: { ...current, ...partial } });
+}
+
 async function sendToContentScript(tabId, scenario) {
   try {
     return await chrome.tabs.sendMessage(tabId, {
@@ -78,6 +84,21 @@ async function waitForTabComplete(tabId, timeoutMs = 30000) {
   });
 }
 
+const pipelineControl = { paused: false, stopped: false, currentTabId: null };
+
+function waitWhilePaused() {
+  return new Promise((resolve) => {
+    function check() {
+      if (!pipelineControl.paused || pipelineControl.stopped) {
+        resolve();
+        return;
+      }
+      setTimeout(check, 300);
+    }
+    check();
+  });
+}
+
 async function downloadOneVideo(video, index, total) {
   broadcast({
     type: "PIPELINE_STATUS",
@@ -92,6 +113,7 @@ async function downloadOneVideo(video, index, total) {
 
   try {
     newTab = await chrome.tabs.create({ url: video.url, active: false });
+    pipelineControl.currentTabId = newTab.id;
     await waitForTabComplete(newTab.id);
 
     broadcast({
@@ -142,6 +164,7 @@ async function downloadOneVideo(video, index, total) {
 
     return { title: video.title, url: video.url, success: false, error: error.message };
   } finally {
+    pipelineControl.currentTabId = null;
     if (newTab) {
       await chrome.tabs.remove(newTab.id).catch(() => {});
     }
@@ -149,7 +172,12 @@ async function downloadOneVideo(video, index, total) {
 }
 
 async function runPipelineAllVideos(listTabId, listScenario) {
+  pipelineControl.paused = false;
+  pipelineControl.stopped = false;
+  pipelineControl.currentTabId = null;
+
   await chrome.storage.local.set({ progressLog: [] });
+  await setPipelineState({ running: true, paused: false });
   broadcast({ type: "PIPELINE_STATUS", stage: "collecting" });
 
   const listResponse = await sendToContentScript(listTabId, listScenario);
@@ -169,8 +197,21 @@ async function runPipelineAllVideos(listTabId, listScenario) {
   broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
 
   const results = [];
+  let stoppedEarly = false;
 
   for (let i = 0; i < videos.length; i++) {
+    if (pipelineControl.stopped) {
+      stoppedEarly = true;
+      break;
+    }
+
+    await waitWhilePaused();
+
+    if (pipelineControl.stopped) {
+      stoppedEarly = true;
+      break;
+    }
+
     const result = await downloadOneVideo(videos[i], i + 1, videos.length);
     results.push(result);
 
@@ -182,10 +223,13 @@ async function runPipelineAllVideos(listTabId, listScenario) {
   const succeeded = results.filter((r) => r.success).length;
   const failed = results.length - succeeded;
 
+  await setPipelineState({ running: false, paused: false });
+
   broadcast({
     type: "PIPELINE_STATUS",
-    stage: "done",
+    stage: stoppedEarly ? "stopped" : "done",
     total: videos.length,
+    processed: results.length,
     succeeded,
     failed,
     results,
@@ -220,37 +264,18 @@ async function appendChunk(sessionId, index, base64) {
 }
 
 async function finalizeFile(sessionId, filename, mimeType) {
-  const created = await chrome.runtime.sendMessage({
+  const result = await chrome.runtime.sendMessage({
     type: "FINALIZE_BLOB",
     sessionId,
+    filename,
     mimeType,
   });
 
-  if (!created || !created.blobUrl) {
-    throw new Error((created && created.error) || "Offscreen document failed to assemble the file");
+  if (!result || typeof result.downloadId !== "number") {
+    throw new Error((result && result.error) || "Offscreen document failed to save the file");
   }
 
-  const blobUrl = created.blobUrl;
-
-  const downloadId = await chrome.downloads.download({
-    url: blobUrl,
-    filename,
-    saveAs: false,
-  });
-
-  function cleanup(delta) {
-    if (delta.id !== downloadId || !delta.state) {
-      return;
-    }
-    if (delta.state.current === "complete" || delta.state.current === "interrupted") {
-      chrome.downloads.onChanged.removeListener(cleanup);
-      chrome.runtime.sendMessage({ type: "REVOKE_BLOB_URL", blobUrl }).catch(() => {});
-    }
-  }
-
-  chrome.downloads.onChanged.addListener(cleanup);
-
-  return downloadId;
+  return result.downloadId;
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
@@ -290,11 +315,37 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
+  if (message.type === "PIPELINE_PAUSE") {
+    pipelineControl.paused = true;
+    setPipelineState({ paused: true });
+    broadcast({ type: "PIPELINE_STATUS", stage: "paused" });
+    return undefined;
+  }
+
+  if (message.type === "PIPELINE_RESUME") {
+    pipelineControl.paused = false;
+    setPipelineState({ paused: false });
+    broadcast({ type: "PIPELINE_STATUS", stage: "resumed" });
+    return undefined;
+  }
+
+  if (message.type === "PIPELINE_STOP") {
+    pipelineControl.stopped = true;
+    pipelineControl.paused = false;
+    setPipelineState({ paused: false });
+    if (pipelineControl.currentTabId) {
+      chrome.tabs.remove(pipelineControl.currentTabId).catch(() => {});
+    }
+    broadcast({ type: "PIPELINE_STATUS", stage: "stopping" });
+    return undefined;
+  }
+
   if (message.type !== "START_PIPELINE") {
     return undefined;
   }
 
   runPipelineAllVideos(message.tabId, message.listScenario).catch((error) => {
+    setPipelineState({ running: false, paused: false });
     broadcast({ type: "PIPELINE_STATUS", stage: "error", error: error.message });
   });
 

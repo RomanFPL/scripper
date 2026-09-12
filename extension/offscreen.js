@@ -40,19 +40,44 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
 
     const blob = new Blob(chunks, { type: message.mimeType });
+
+    if (blob.size === 0) {
+      sendResponse({ error: "Assembled blob is empty (0 bytes)" });
+      return true;
+    }
+
     const blobUrl = URL.createObjectURL(blob);
 
-    sendResponse({ blobUrl });
+    chrome.downloads
+      .download({ url: blobUrl, filename: message.filename, saveAs: false })
+      .then((downloadId) => {
+        function cleanup(delta) {
+          if (delta.id !== downloadId || !delta.state) {
+            return;
+          }
+          if (
+            delta.state.current === "complete" ||
+            delta.state.current === "interrupted"
+          ) {
+            chrome.downloads.onChanged.removeListener(cleanup);
+            URL.revokeObjectURL(blobUrl);
+          }
+        }
+
+        chrome.downloads.onChanged.addListener(cleanup);
+
+        sendResponse({ downloadId, blobSize: blob.size });
+      })
+      .catch((error) => {
+        URL.revokeObjectURL(blobUrl);
+        sendResponse({ error: error.message });
+      });
+
     return true;
   }
 
   if (message.type === "ABORT_SESSION") {
     sessions.delete(message.sessionId);
-    return undefined;
-  }
-
-  if (message.type === "REVOKE_BLOB_URL") {
-    URL.revokeObjectURL(message.blobUrl);
     return undefined;
   }
 
