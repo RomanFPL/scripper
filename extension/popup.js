@@ -7,6 +7,7 @@ let loadedScenario = null;
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const runButton = document.getElementById("run");
+const refreshButton = document.getElementById("refreshBtn");
 const output = document.getElementById("output");
 const indexUrl = document.getElementById("index-url");
 
@@ -176,5 +177,7 @@ scenarioSelect.addEventListener("change", () => {
 loadButton.addEventListener("click", loadSelectedScenario);
 
 runButton.addEventListener("click", runSelectedScenario);
+
+refreshButton.addEventListener("click", loadScenarioList);
 
 loadScenarioList();
