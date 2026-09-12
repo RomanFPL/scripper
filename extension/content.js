@@ -240,7 +240,6 @@ const ACTIONS = {
       });
     }
 
-    const blob = new Blob(parts, { type: mimeType });
     const filename = sanitizeHLSFilename(
       step.filename || titleValue || document.title,
       outputExt
@@ -250,26 +249,37 @@ const ACTIONS = {
       stage: "saving",
       video: videoLabel,
       filename,
-      bytes: blob.size,
+      bytes: bytesDownloaded,
     });
 
-    const blobUrl = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = blobUrl;
-    link.download = filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+    const saveResponse = await chrome.runtime.sendMessage({
+      type: "SAVE_FILE",
+      filename,
+      mimeType,
+      buffers: parts,
+    });
+
+    if (!saveResponse || !saveResponse.success) {
+      throw new Error(
+        (saveResponse && saveResponse.error) || "chrome.downloads.download failed"
+      );
+    }
 
     reportHLSProgress({
       stage: "done",
       video: videoLabel,
       filename,
-      bytes: blob.size,
+      bytes: bytesDownloaded,
+      downloadId: saveResponse.downloadId,
     });
 
-    return { filename, bytes: blob.size, segments: segmentUrls.length, url: playlistUrl };
+    return {
+      filename,
+      bytes: bytesDownloaded,
+      segments: segmentUrls.length,
+      url: playlistUrl,
+      downloadId: saveResponse.downloadId,
+    };
   },
 };
 

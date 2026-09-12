@@ -134,6 +134,31 @@ async function runPipelineFirstVideo(listTabId, listScenario) {
   });
 }
 
+async function saveFile(filename, mimeType, buffers) {
+  const blob = new Blob(buffers, { type: mimeType });
+  const blobUrl = URL.createObjectURL(blob);
+
+  const downloadId = await chrome.downloads.download({
+    url: blobUrl,
+    filename,
+    saveAs: false,
+  });
+
+  function cleanup(delta) {
+    if (delta.id !== downloadId || !delta.state) {
+      return;
+    }
+    if (delta.state.current === "complete" || delta.state.current === "interrupted") {
+      chrome.downloads.onChanged.removeListener(cleanup);
+      URL.revokeObjectURL(blobUrl);
+    }
+  }
+
+  chrome.downloads.onChanged.addListener(cleanup);
+
+  return downloadId;
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (!message) {
     return undefined;
@@ -142,6 +167,17 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === "HLS_PROGRESS") {
     persistProgress(message);
     return undefined;
+  }
+
+  if (message.type === "SAVE_FILE") {
+    saveFile(message.filename, message.mimeType, message.buffers)
+      .then((downloadId) => {
+        sendResponse({ success: true, downloadId });
+      })
+      .catch((error) => {
+        sendResponse({ success: false, error: error.message });
+      });
+    return true;
   }
 
   if (message.type !== "START_PIPELINE") {
