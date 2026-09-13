@@ -100,11 +100,69 @@
         opacity: 0.3;
         cursor: not-allowed;
       }
-      #sessionBlock {
+      #selectorList {
+        margin-bottom: 10px;
+      }
+      .selector-row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        margin-bottom: 4px;
+        font-size: 11px;
+        cursor: pointer;
+        background: #f5f5f5;
+      }
+      .selector-row.active {
+        background: #dbeafe;
+        border-color: #93c5fd;
+        font-weight: 600;
+      }
+      .selector-row span {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .selector-delete,
+      .selector-edit {
+        flex-shrink: 0;
+        display: inline-flex;
+        align-items: center;
+        border: none;
+        background: transparent;
+        cursor: pointer;
+        font-size: 13px;
+        color: #666;
+        padding: 0 4px;
+        line-height: 1;
+      }
+      .selector-empty {
+        font-size: 11px;
+        color: #888;
+        padding: 4px 0;
+      }
+      #sessionBlock,
+      #selectorForm {
         border: 1px solid #eee;
         border-radius: 6px;
         padding: 8px;
         margin-bottom: 10px;
+      }
+      #selectorTestResult {
+        white-space: pre-wrap;
+        background: #f5f5f5;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 6px 8px;
+        font-family: ui-monospace, monospace;
+        font-size: 11px;
+        max-height: 100px;
+        overflow-y: auto;
+        margin-bottom: 4px;
       }
       #videoList {
         max-height: 140px;
@@ -173,24 +231,33 @@
       <button id="load" disabled>Load scenario</button>
     </div>
 
-    <label for="itemSelector">Item selector (collectLinks)</label>
-    <input type="text" id="itemSelector" placeholder='e.g. [data-el="Thumb"]' />
-
+    <label>Selector</label>
     <div class="buttons">
-      <button id="pickItem">Pick on page</button>
+      <button id="addSelectorBtn">+ Add</button>
     </div>
 
-    <label for="linkSelector">Link selector (inside item)</label>
-    <input type="text" id="linkSelector" placeholder="a[href]" />
+    <div id="selectorList"></div>
 
-    <div class="buttons">
-      <button id="pickLink">Pick on page</button>
+    <div id="selectorForm" hidden>
+      <label for="itemSelector">Selector (outer / item)</label>
+      <input type="text" id="itemSelector" placeholder='e.g. [data-el="Thumb"]' />
+      <div class="buttons">
+        <button id="pickItem">Pick on page</button>
+      </div>
+
+      <label for="linkSelector">Selector (inner / link)</label>
+      <input type="text" id="linkSelector" placeholder="a[href]" />
+      <div class="buttons">
+        <button id="pickLink">Pick on page</button>
+      </div>
+
+      <div class="buttons">
+        <button id="testSelectorBtn">Test</button>
+        <button id="saveSelectorBtn">Save</button>
+      </div>
+
+      <div id="selectorTestResult" hidden></div>
     </div>
-
-    <label for="selectorHistory">Saved selectors</label>
-    <select id="selectorHistory">
-      <option value="">— none saved —</option>
-    </select>
 
     <div class="buttons">
       <button id="collect">Collect links</button>

@@ -56,13 +56,25 @@ const ACTIONS = {
       throw new Error('Step is missing a valid "linkSelector" string.');
     }
 
-    const items = Array.from(document.querySelectorAll(step.selector));
+    let items;
+    try {
+      items = Array.from(document.querySelectorAll(step.selector));
+    } catch (err) {
+      throw new Error(`Invalid item selector "${step.selector}": ${err.message}`);
+    }
 
     return items
       .map((item, index) => {
-        const link =
-          item.closest(step.linkSelector) ||
-          item.querySelector(step.linkSelector);
+        let link;
+        try {
+          link =
+            item.closest(step.linkSelector) ||
+            item.querySelector(step.linkSelector);
+        } catch (err) {
+          throw new Error(
+            `Invalid link selector "${step.linkSelector}": ${err.message}`
+          );
+        }
 
         if (!link) {
           return null;
@@ -605,6 +617,28 @@ chrome.runtime.onMessage.addListener((message) => {
   }
   startElementPicker(message.kind);
   return undefined;
+});
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!message || message.type !== "TEST_SELECTOR") {
+    return undefined;
+  }
+
+  try {
+    const videos = ACTIONS.collectLinks({
+      selector: message.selector,
+      linkSelector: message.linkSelector,
+    });
+    sendResponse({
+      success: true,
+      count: videos.length,
+      titles: videos.map((video) => video.title),
+    });
+  } catch (err) {
+    sendResponse({ success: false, error: err.message });
+  }
+
+  return false;
 });
 
 })();

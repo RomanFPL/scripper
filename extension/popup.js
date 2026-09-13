@@ -7,16 +7,23 @@ let sessions = [];
 let activeSessionId = null;
 let activeSessionRunning = false;
 let selectorHistory = [];
+let activeSelectorIndex = null;
+let editingSelectorIndex = null;
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const refreshButton = document.getElementById("refreshBtn");
 const collectButton = document.getElementById("collect");
+const addSelectorButton = document.getElementById("addSelectorBtn");
+const selectorFormEl = document.getElementById("selectorForm");
 const itemSelectorInput = document.getElementById("itemSelector");
 const linkSelectorInput = document.getElementById("linkSelector");
 const pickItemButton = document.getElementById("pickItem");
 const pickLinkButton = document.getElementById("pickLink");
-const selectorHistorySelect = document.getElementById("selectorHistory");
+const testSelectorButton = document.getElementById("testSelectorBtn");
+const saveSelectorButton = document.getElementById("saveSelectorBtn");
+const selectorTestResultEl = document.getElementById("selectorTestResult");
+const selectorListEl = document.getElementById("selectorList");
 const sessionTabsEl = document.getElementById("sessionTabs");
 const sessionBlockEl = document.getElementById("sessionBlock");
 const videoListEl = document.getElementById("videoList");
@@ -561,8 +568,7 @@ function buildCollectScenario() {
     return null;
   }
 
-  const selector = itemSelectorInput.value.trim();
-  const linkSelector = linkSelectorInput.value.trim();
+  const active = activeSelectorIndex !== null ? selectorHistory[activeSelectorIndex] : null;
 
   const scenario = JSON.parse(JSON.stringify(loadedScenario));
 
@@ -572,49 +578,98 @@ function buildCollectScenario() {
     }
     return {
       ...step,
-      selector: selector || step.selector,
-      linkSelector: linkSelector || step.linkSelector,
+      selector: (active && active.selector) || step.selector,
+      linkSelector: (active && active.linkSelector) || step.linkSelector,
     };
   });
 
   return scenario;
 }
 
+async function persistActiveSelectorIndex() {
+  await chrome.storage.local.set({ activeSelectorIndex });
+}
+
 async function saveSelectorToHistory(selector, linkSelector, hostname) {
-  const exists = selectorHistory.some(
+  let index = selectorHistory.findIndex(
     (entry) => entry.selector === selector && entry.linkSelector === linkSelector
   );
 
-  if (!exists) {
+  if (index === -1) {
     selectorHistory.unshift({ selector, linkSelector, hostname, ts: Date.now() });
     selectorHistory = selectorHistory.slice(0, 20);
+    index = 0;
     await chrome.storage.local.set({ selectorHistory });
-    renderSelectorHistory();
   }
+
+  activeSelectorIndex = index;
+  await persistActiveSelectorIndex();
+  renderSelectorHistory();
 }
 
 function renderSelectorHistory() {
-  selectorHistorySelect.innerHTML = "";
+  selectorListEl.innerHTML = "";
 
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent =
-    selectorHistory.length === 0 ? "— none saved —" : "— pick a saved selector —";
-  selectorHistorySelect.appendChild(placeholder);
+  if (selectorHistory.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "selector-empty";
+    empty.textContent = "— none saved —";
+    selectorListEl.appendChild(empty);
+    return;
+  }
 
   selectorHistory.forEach((entry, i) => {
-    const option = document.createElement("option");
-    option.value = String(i);
-    option.textContent = `${entry.hostname}: ${entry.selector} / ${entry.linkSelector}`;
-    selectorHistorySelect.appendChild(option);
+    const row = document.createElement("div");
+    row.className = "selector-row" + (i === activeSelectorIndex ? " active" : "");
+
+    const editBtn = document.createElement("button");
+    editBtn.className = "selector-edit";
+    editBtn.innerHTML =
+      '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
+    editBtn.title = "Edit this selector";
+    editBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      editSelector(i);
+    });
+
+    const label = document.createElement("span");
+    label.textContent = `${entry.hostname}: ${entry.selector} / ${entry.linkSelector}`;
+    label.addEventListener("click", () => {
+      activeSelectorIndex = i;
+      persistActiveSelectorIndex();
+      renderSelectorHistory();
+    });
+
+    const deleteBtn = document.createElement("button");
+    deleteBtn.className = "selector-delete";
+    deleteBtn.textContent = "×";
+    deleteBtn.title = "Delete this selector";
+    deleteBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      deleteSelector(i);
+    });
+
+    row.appendChild(label);
+    row.appendChild(editBtn);
+    row.appendChild(deleteBtn);
+    selectorListEl.appendChild(row);
   });
 }
 
 async function restoreSelectorHistory() {
-  const stored = await chrome.storage.local.get("selectorHistory");
+  const stored = await chrome.storage.local.get(["selectorHistory", "activeSelectorIndex"]);
+
   if (Array.isArray(stored.selectorHistory)) {
     selectorHistory = stored.selectorHistory;
   }
+
+  if (
+    typeof stored.activeSelectorIndex === "number" &&
+    selectorHistory[stored.activeSelectorIndex]
+  ) {
+    activeSelectorIndex = stored.activeSelectorIndex;
+  }
+
   renderSelectorHistory();
 }
 
@@ -680,6 +735,8 @@ async function applyPendingPickerResult() {
     return;
   }
 
+  selectorFormEl.hidden = false;
+
   if (result.kind === "item") {
     itemSelectorInput.value = result.selector;
   } else if (result.kind === "link") {
@@ -690,9 +747,159 @@ async function applyPendingPickerResult() {
   show(`Picked ${result.kind} selector: ${result.selector}`);
 }
 
+async function sendTestSelector(tabId, selector, linkSelector) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, {
+      type: "TEST_SELECTOR",
+      selector,
+      linkSelector,
+    });
+  } catch (error) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    return await chrome.tabs.sendMessage(tabId, {
+      type: "TEST_SELECTOR",
+      selector,
+      linkSelector,
+    });
+  }
+}
+
+async function deleteSelector(index) {
+  const entry = selectorHistory[index];
+
+  if (!entry) {
+    return;
+  }
+
+  selectorHistory.splice(index, 1);
+  await chrome.storage.local.set({ selectorHistory });
+
+  if (activeSelectorIndex === index) {
+    activeSelectorIndex = null;
+  } else if (activeSelectorIndex !== null && activeSelectorIndex > index) {
+    activeSelectorIndex -= 1;
+  }
+  await persistActiveSelectorIndex();
+
+  renderSelectorHistory();
+  show(`Deleted selector: ${entry.selector} / ${entry.linkSelector}`);
+}
+
+async function testSelector() {
+  const selector = itemSelectorInput.value.trim();
+  const linkSelector = linkSelectorInput.value.trim() || "a[href]";
+
+  if (!selector) {
+    show("Enter (or pick) an item selector first.");
+    return;
+  }
+
+  testSelectorButton.disabled = true;
+  selectorTestResultEl.hidden = false;
+  selectorTestResultEl.textContent = "Testing on the current page...";
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab || !tab.id) {
+      throw new Error("No active tab.");
+    }
+
+    const response = await sendTestSelector(tab.id, selector, linkSelector);
+
+    if (!response) {
+      throw new Error("No response from the page. Try reloading the tab and testing again.");
+    }
+
+    if (!response.success) {
+      throw new Error(response.error || `Test failed (raw response: ${JSON.stringify(response)}).`);
+    }
+
+    const preview = response.titles.slice(0, 10).join(", ");
+    const more = response.titles.length > 10 ? ` (+${response.titles.length - 10} more)` : "";
+
+    selectorTestResultEl.textContent =
+      response.count === 0
+        ? "Found 0 elements. Check the selectors and try again."
+        : `Found ${response.count} element(s): ${preview}${more}`;
+  } catch (error) {
+    selectorTestResultEl.textContent = `ERROR: ${error.message}`;
+    console.error("[Video Runner]", error);
+  } finally {
+    testSelectorButton.disabled = false;
+  }
+}
+
+function editSelector(index) {
+  const entry = selectorHistory[index];
+  if (!entry) {
+    return;
+  }
+
+  editingSelectorIndex = index;
+  itemSelectorInput.value = entry.selector;
+  linkSelectorInput.value = entry.linkSelector;
+  selectorFormEl.hidden = false;
+  persistSelectorFields();
+}
+
+async function saveSelector() {
+  const selector = itemSelectorInput.value.trim();
+  const linkSelector = linkSelectorInput.value.trim() || "a[href]";
+
+  if (!selector) {
+    show("Enter (or pick) an item selector first.");
+    return;
+  }
+
+  saveSelectorButton.disabled = true;
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    let hostname = "page";
+    try {
+      hostname = new URL(tab.url).hostname;
+    } catch (e) {}
+
+    if (editingSelectorIndex !== null && selectorHistory[editingSelectorIndex]) {
+      selectorHistory[editingSelectorIndex] = {
+        ...selectorHistory[editingSelectorIndex],
+        selector,
+        linkSelector,
+        hostname,
+      };
+      await chrome.storage.local.set({ selectorHistory });
+
+      activeSelectorIndex = editingSelectorIndex;
+      await persistActiveSelectorIndex();
+
+      editingSelectorIndex = null;
+      renderSelectorHistory();
+      show(`Updated selector: ${selector} / ${linkSelector}`);
+    } else {
+      await saveSelectorToHistory(selector, linkSelector, hostname);
+      show(`Saved selector: ${selector} / ${linkSelector}`);
+    }
+  } catch (error) {
+    show(`ERROR:\n${error.message}`);
+    console.error("[Video Runner]", error);
+  } finally {
+    saveSelectorButton.disabled = false;
+  }
+}
+
 async function collectVideos() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
+    return;
+  }
+
+  if (activeSelectorIndex === null || !selectorHistory[activeSelectorIndex]) {
+    show('No selector selected. Click "+ Add", set it up, and "Save & Test" first.');
     return;
   }
 
@@ -725,7 +932,11 @@ async function collectVideos() {
     const videos = response.variables.videos;
 
     if (!Array.isArray(videos) || videos.length === 0) {
-      throw new Error("variables.videos is empty — nothing found on this page.");
+      const collectStep = scenario.steps.find((step) => step.action === "collectLinks");
+      throw new Error(
+        `Found 0 videos on this page using selector "${collectStep.selector}" / "${collectStep.linkSelector}".\n` +
+          'Make sure this selector was tested with "Save & Test" on this exact page/layout.'
+      );
     }
 
     let label = "Page";
@@ -885,15 +1096,20 @@ linkSelectorInput.addEventListener("change", persistSelectorFields);
 pickItemButton.addEventListener("click", () => pickOnPage("item"));
 pickLinkButton.addEventListener("click", () => pickOnPage("link"));
 
-selectorHistorySelect.addEventListener("change", () => {
-  const index = Number(selectorHistorySelect.value);
-  const entry = selectorHistory[index];
-  if (!entry) {
-    return;
+testSelectorButton.addEventListener("click", testSelector);
+
+saveSelectorButton.addEventListener("click", saveSelector);
+
+addSelectorButton.addEventListener("click", () => {
+  const opening = selectorFormEl.hidden;
+  selectorFormEl.hidden = !selectorFormEl.hidden;
+
+  if (opening) {
+    editingSelectorIndex = null;
+    itemSelectorInput.value = "";
+    linkSelectorInput.value = "";
+    selectorTestResultEl.hidden = true;
   }
-  itemSelectorInput.value = entry.selector;
-  linkSelectorInput.value = entry.linkSelector;
-  persistSelectorFields();
 });
 
 chrome.storage.onChanged.addListener((changes, area) => {
