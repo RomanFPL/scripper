@@ -3,14 +3,21 @@ const SCENARIOS_INDEX_URL =
 
 let scenarios = [];
 let loadedScenario = null;
+let collectedVideos = [];
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const runButton = document.getElementById("run");
 const refreshButton = document.getElementById("refreshBtn");
+const collectButton = document.getElementById("collect");
+const videoListWrap = document.getElementById("videoListWrap");
+const videoListEl = document.getElementById("videoList");
+const selectAllButton = document.getElementById("selectAll");
+const selectNoneButton = document.getElementById("selectNone");
 const pipelineButton = document.getElementById("pipeline");
 const pauseButton = document.getElementById("pause");
 const stopButton = document.getElementById("stop");
+const concurrencyInput = document.getElementById("concurrency");
 const output = document.getElementById("output");
 const progress = document.getElementById("progress");
 const indexUrl = document.getElementById("index-url");
@@ -335,11 +342,58 @@ async function runSelectedScenario() {
   }
 }
 
-async function startPipelineAllVideos() {
+function updatePipelineButtonState() {
+  pipelineButton.disabled = !collectedVideos.some((video) => video.selected);
+}
+
+async function persistCollectedVideos() {
+  await chrome.storage.local.set({ collectedVideos });
+}
+
+function renderVideoList() {
+  videoListEl.innerHTML = "";
+
+  collectedVideos.forEach((video, i) => {
+    const label = document.createElement("label");
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = video.selected;
+    checkbox.addEventListener("change", () => {
+      collectedVideos[i].selected = checkbox.checked;
+      persistCollectedVideos();
+      updatePipelineButtonState();
+    });
+
+    const span = document.createElement("span");
+    span.textContent = video.title;
+    span.title = video.url;
+
+    label.appendChild(checkbox);
+    label.appendChild(span);
+    videoListEl.appendChild(label);
+  });
+
+  videoListWrap.hidden = collectedVideos.length === 0;
+  updatePipelineButtonState();
+}
+
+async function restoreCollectedVideos() {
+  const stored = await chrome.storage.local.get("collectedVideos");
+  if (Array.isArray(stored.collectedVideos)) {
+    collectedVideos = stored.collectedVideos;
+    renderVideoList();
+  }
+}
+
+async function collectVideos() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
     return;
   }
+
+  collectButton.disabled = true;
+  show("Collecting links...");
 
   try {
     const [tab] = await chrome.tabs.query({
@@ -351,16 +405,57 @@ async function startPipelineAllVideos() {
       throw new Error("No active tab.");
     }
 
+    const response = await sendToContentScript(tab.id, loadedScenario);
+
+    if (!response || !response.success) {
+      throw new Error((response && response.error) || "Failed to collect links.");
+    }
+
+    const videos = response.variables.videos;
+
+    if (!Array.isArray(videos) || videos.length === 0) {
+      throw new Error("variables.videos is empty — nothing found on this page.");
+    }
+
+    collectedVideos = videos.map((video) => ({ ...video, selected: true }));
+    await persistCollectedVideos();
+    renderVideoList();
+
+    show(
+      `Collected ${collectedVideos.length} video(s). Review the list and click "Download selected".`
+    );
+  } catch (error) {
+    show(`ERROR:\n${error.message}`);
+
+    console.error("[Video Runner]", error);
+  } finally {
+    collectButton.disabled = false;
+  }
+}
+
+async function startPipelineSelected() {
+  const selected = collectedVideos.filter((video) => video.selected);
+
+  if (selected.length === 0) {
+    show("No videos selected.");
+    return;
+  }
+
+  try {
+    const concurrency = Math.max(1, Math.min(10, Number(concurrencyInput.value) || 3));
+    concurrencyInput.value = concurrency;
+    await chrome.storage.local.set({ pipelineConcurrency: concurrency });
+
     await chrome.runtime.sendMessage({
       type: "START_PIPELINE",
-      tabId: tab.id,
-      listScenario: loadedScenario,
+      videos: selected,
+      concurrency,
     });
 
     await applyPipelineState({ running: true, paused: false });
 
     show(
-      "Pipeline started in background.js — it keeps running even if this popup closes.\nReopen the popup to see progress while it's still running."
+      `Pipeline started for ${selected.length} video(s) in background.js — it keeps running even if this popup closes.\nReopen the popup to see progress while it's still running.`
     );
   } catch (error) {
     show(`ERROR:\n${error.message}`);
@@ -422,10 +517,40 @@ runButton.addEventListener("click", runSelectedScenario);
 
 refreshButton.addEventListener("click", loadScenarioList);
 
-pipelineButton.addEventListener("click", startPipelineAllVideos);
+collectButton.addEventListener("click", collectVideos);
+
+selectAllButton.addEventListener("click", () => {
+  collectedVideos.forEach((video) => (video.selected = true));
+  persistCollectedVideos();
+  renderVideoList();
+});
+
+selectNoneButton.addEventListener("click", () => {
+  collectedVideos.forEach((video) => (video.selected = false));
+  persistCollectedVideos();
+  renderVideoList();
+});
+
+pipelineButton.addEventListener("click", startPipelineSelected);
 
 pauseButton.addEventListener("click", togglePause);
 
 stopButton.addEventListener("click", stopPipeline);
+
+concurrencyInput.addEventListener("change", () => {
+  const concurrency = Math.max(1, Math.min(10, Number(concurrencyInput.value) || 3));
+  concurrencyInput.value = concurrency;
+  chrome.storage.local.set({ pipelineConcurrency: concurrency });
+});
+
+async function restoreConcurrency() {
+  const stored = await chrome.storage.local.get("pipelineConcurrency");
+  if (stored.pipelineConcurrency) {
+    concurrencyInput.value = stored.pipelineConcurrency;
+  }
+}
+
+restoreConcurrency();
+restoreCollectedVideos();
 
 loadScenarioList();

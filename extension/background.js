@@ -84,7 +84,9 @@ async function waitForTabComplete(tabId, timeoutMs = 30000) {
   });
 }
 
-const pipelineControl = { paused: false, stopped: false, currentTabId: null };
+const DEFAULT_PIPELINE_CONCURRENCY = 3;
+
+const pipelineControl = { paused: false, stopped: false, currentTabIds: new Set() };
 
 function waitWhilePaused() {
   return new Promise((resolve) => {
@@ -113,7 +115,7 @@ async function downloadOneVideo(video, index, total) {
 
   try {
     newTab = await chrome.tabs.create({ url: video.url, active: false });
-    pipelineControl.currentTabId = newTab.id;
+    pipelineControl.currentTabIds.add(newTab.id);
     await waitForTabComplete(newTab.id);
 
     broadcast({
@@ -164,66 +166,69 @@ async function downloadOneVideo(video, index, total) {
 
     return { title: video.title, url: video.url, success: false, error: error.message };
   } finally {
-    pipelineControl.currentTabId = null;
     if (newTab) {
+      pipelineControl.currentTabIds.delete(newTab.id);
       await chrome.tabs.remove(newTab.id).catch(() => {});
     }
   }
 }
 
-async function runPipelineAllVideos(listTabId, listScenario) {
+async function runPipelineAllVideos(videos, concurrency) {
   pipelineControl.paused = false;
   pipelineControl.stopped = false;
-  pipelineControl.currentTabId = null;
+  pipelineControl.currentTabIds.clear();
 
   await chrome.storage.local.set({ progressLog: [] });
   await setPipelineState({ running: true, paused: false });
   chrome.power.requestKeepAwake("system");
-  broadcast({ type: "PIPELINE_STATUS", stage: "collecting" });
+  broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
 
   try {
-    const listResponse = await sendToContentScript(listTabId, listScenario);
-
-    if (!listResponse || !listResponse.success) {
-      throw new Error(
-        (listResponse && listResponse.error) || "Failed to collect links."
-      );
-    }
-
-    const videos = listResponse.variables.videos;
-
-    if (!Array.isArray(videos) || videos.length === 0) {
-      throw new Error("variables.videos is empty — nothing to download.");
-    }
-
-    broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
-
-    const results = [];
+    const results = new Array(videos.length);
+    let nextIndex = 0;
     let stoppedEarly = false;
 
-    for (let i = 0; i < videos.length; i++) {
-      if (pipelineControl.stopped) {
-        stoppedEarly = true;
-        break;
-      }
+    async function worker() {
+      while (true) {
+        if (pipelineControl.stopped) {
+          stoppedEarly = true;
+          return;
+        }
 
-      await waitWhilePaused();
+        await waitWhilePaused();
 
-      if (pipelineControl.stopped) {
-        stoppedEarly = true;
-        break;
-      }
+        if (pipelineControl.stopped) {
+          stoppedEarly = true;
+          return;
+        }
 
-      const result = await downloadOneVideo(videos[i], i + 1, videos.length);
-      results.push(result);
+        const i = nextIndex;
+        nextIndex += 1;
 
-      if (i < videos.length - 1) {
-        await sleep(1000);
+        if (i >= videos.length) {
+          return;
+        }
+
+        results[i] = await downloadOneVideo(videos[i], i + 1, videos.length);
       }
     }
 
-    const succeeded = results.filter((r) => r.success).length;
-    const failed = results.length - succeeded;
+    const workerCount = Math.min(
+      Number(concurrency) || DEFAULT_PIPELINE_CONCURRENCY,
+      videos.length
+    );
+    const workers = [];
+
+    for (let w = 0; w < workerCount; w++) {
+      workers.push(worker());
+      await sleep(300);
+    }
+
+    await Promise.all(workers);
+
+    const finishedResults = results.filter(Boolean);
+    const succeeded = finishedResults.filter((r) => r.success).length;
+    const failed = finishedResults.length - succeeded;
 
     await setPipelineState({ running: false, paused: false });
 
@@ -231,10 +236,10 @@ async function runPipelineAllVideos(listTabId, listScenario) {
       type: "PIPELINE_STATUS",
       stage: stoppedEarly ? "stopped" : "done",
       total: videos.length,
-      processed: results.length,
+      processed: finishedResults.length,
       succeeded,
       failed,
-      results,
+      results: finishedResults,
     });
   } finally {
     chrome.power.releaseKeepAwake();
@@ -357,8 +362,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     pipelineControl.stopped = true;
     pipelineControl.paused = false;
     setPipelineState({ paused: false });
-    if (pipelineControl.currentTabId) {
-      chrome.tabs.remove(pipelineControl.currentTabId).catch(() => {});
+    for (const tabId of pipelineControl.currentTabIds) {
+      chrome.tabs.remove(tabId).catch(() => {});
     }
     broadcast({ type: "PIPELINE_STATUS", stage: "stopping" });
     return undefined;
@@ -368,7 +373,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
-  runPipelineAllVideos(message.tabId, message.listScenario).catch((error) => {
+  runPipelineAllVideos(message.videos, message.concurrency).catch((error) => {
     setPipelineState({ running: false, paused: false });
     broadcast({ type: "PIPELINE_STATUS", stage: "error", error: error.message });
   });

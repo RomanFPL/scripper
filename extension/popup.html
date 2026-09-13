@@ -28,7 +28,8 @@
         color: #444;
         margin-bottom: 3px;
       }
-      select {
+      select,
+      input[type="number"] {
         width: 100%;
         padding: 4px;
         margin-bottom: 10px;
@@ -59,6 +60,32 @@
       #progress {
         margin-top: 10px;
       }
+      #videoList {
+        max-height: 160px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+        padding: 6px 8px;
+        margin-bottom: 10px;
+      }
+      #videoList label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 4px;
+        font-weight: normal;
+        font-size: 12px;
+        color: #1a1a1a;
+      }
+      #videoList input[type="checkbox"] {
+        flex-shrink: 0;
+        margin: 0;
+      }
+      #videoList span {
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
     </style>
   </head>
   <body>
@@ -80,7 +107,22 @@
     </div>
 
     <div class="buttons">
-      <button id="pipeline">Collect → download ALL videos</button>
+      <button id="collect">Collect links</button>
+    </div>
+
+    <div id="videoListWrap" hidden>
+      <div class="buttons">
+        <button id="selectAll">Select all</button>
+        <button id="selectNone">Select none</button>
+      </div>
+      <div id="videoList"></div>
+    </div>
+
+    <label for="concurrency">Parallel downloads</label>
+    <input type="number" id="concurrency" min="1" max="10" value="3" />
+
+    <div class="buttons">
+      <button id="pipeline" disabled>Download selected</button>
     </div>
 
     <div class="buttons">
