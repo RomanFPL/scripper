@@ -490,7 +490,7 @@ async function loadScenarioList() {
 
     show(`ERROR:\n${error.message}`);
 
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   }
 }
 
@@ -544,7 +544,7 @@ async function loadSelectedScenario() {
 
     show(`ERROR:\n${error.message}`);
 
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   }
 }
 
@@ -721,7 +721,7 @@ async function pickOnPage(kind) {
     );
   } catch (error) {
     show(`ERROR:\n${error.message}`);
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   }
 }
 
@@ -831,7 +831,7 @@ async function testSelector() {
         : `Found ${response.count} element(s): ${preview}${more}`;
   } catch (error) {
     selectorTestResultEl.textContent = `ERROR: ${error.message}`;
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   } finally {
     testSelectorButton.disabled = false;
   }
@@ -890,7 +890,7 @@ async function saveSelector() {
     }
   } catch (error) {
     show(`ERROR:\n${error.message}`);
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   } finally {
     saveSelectorButton.disabled = false;
   }
@@ -973,7 +973,7 @@ async function collectVideos() {
   } catch (error) {
     show(`ERROR:\n${error.message}`);
 
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   } finally {
     collectButton.disabled = false;
   }
@@ -1012,7 +1012,7 @@ async function startPipelineSelected() {
   } catch (error) {
     show(`ERROR:\n${error.message}`);
 
-    console.error("[Video Runner]", error);
+    console.error("[Scripper]", error);
   }
 }
 

@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "Video Runner",
+  "name": "Scripper",
   "version": "0.1.0",
   "description": "Static browser-extension runner that executes a scenario loaded from a remote JSON file using a fixed set of built-in actions. No remote code is ever executed.",
 
@@ -21,6 +21,6 @@
 
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Video Runner"
+    "default_title": "Scripper"
   }
 }

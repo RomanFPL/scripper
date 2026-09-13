@@ -5,7 +5,7 @@ window.__videoRunnerLoaded = true;
 
 const ACTIONS = {
   log(step) {
-    console.log("[Video Runner]", step.message);
+    console.log("[Scripper]", step.message);
     return step.message;
   },
 
@@ -345,7 +345,7 @@ function sanitizeHLSFilename(name, ext = "mp4") {
 }
 
 function reportHLSProgress(data) {
-  console.log("[Video Runner][HLS]", data);
+  console.log("[Scripper][HLS]", data);
   try {
     chrome.runtime.sendMessage({ type: "HLS_PROGRESS", ...data });
   } catch (err) {}

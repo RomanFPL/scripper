@@ -1,9 +1,9 @@
 chrome.runtime.onInstalled.addListener((details) => {
-  console.log(`[Video Runner] Extension installed/updated. Reason: ${details.reason}`);
+  console.log(`[Scripper] Extension installed/updated. Reason: ${details.reason}`);
 });
 
 chrome.runtime.onStartup.addListener(() => {
-  console.log("[Video Runner] Browser startup: service worker active.");
+  console.log("[Scripper] Browser startup: service worker active.");
 });
 
 const MAX_LOG_ENTRIES = 200;
