@@ -29,10 +29,12 @@
         margin-bottom: 3px;
       }
       select,
-      input[type="number"] {
+      input[type="number"],
+      input[type="text"] {
         width: 100%;
         padding: 4px;
         margin-bottom: 10px;
+        box-sizing: border-box;
       }
       .buttons {
         display: flex;
@@ -169,6 +171,28 @@
 
     <div class="buttons">
       <button id="load" disabled>Load scenario</button>
+    </div>
+
+    <label for="itemSelector">Item selector (collectLinks)</label>
+    <input type="text" id="itemSelector" placeholder='e.g. [data-el="Thumb"]' />
+
+    <div class="buttons">
+      <button id="pickItem">Pick on page</button>
+    </div>
+
+    <label for="linkSelector">Link selector (inside item)</label>
+    <input type="text" id="linkSelector" placeholder="a[href]" />
+
+    <div class="buttons">
+      <button id="pickLink">Pick on page</button>
+    </div>
+
+    <label for="selectorHistory">Saved selectors</label>
+    <select id="selectorHistory">
+      <option value="">— none saved —</option>
+    </select>
+
+    <div class="buttons">
       <button id="collect">Collect links</button>
     </div>
 

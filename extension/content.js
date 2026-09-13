@@ -362,7 +362,7 @@ async function fetchWithRetry(url, {
   pipelineSessionId,
   retries = 3,
   delayMs = 1000,
-  timeoutMs = 30000,
+  timeoutMs = 60000,
   as = "arraybuffer",
 } = {}) {
   let lastError;
@@ -496,6 +496,115 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     });
 
   return true;
+});
+
+function cssEscape(value) {
+  if (window.CSS && CSS.escape) {
+    return CSS.escape(value);
+  }
+  return String(value).replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+}
+
+function buildSelectorForElement(el) {
+  for (const attr of Array.from(el.attributes)) {
+    if (/^data-/i.test(attr.name) && attr.value && attr.value.length <= 60) {
+      return `[${attr.name}="${attr.value}"]`;
+    }
+  }
+  if (el.id) {
+    return `#${cssEscape(el.id)}`;
+  }
+  if (typeof el.className === "string" && el.className.trim()) {
+    const firstClass = el.className.trim().split(/\s+/)[0];
+    return `${el.tagName.toLowerCase()}.${cssEscape(firstClass)}`;
+  }
+  return el.tagName.toLowerCase();
+}
+
+function showPickerToast(message) {
+  const toast = document.createElement("div");
+  toast.textContent = message;
+  toast.style.cssText =
+    "position:fixed;bottom:20px;left:50%;transform:translateX(-50%);" +
+    "z-index:2147483647;background:#1a1a1a;color:#fff;padding:10px 16px;" +
+    "border-radius:6px;font:13px -apple-system,sans-serif;white-space:pre-line;" +
+    "box-shadow:0 4px 12px rgba(0,0,0,0.3);pointer-events:none;text-align:center;";
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 3000);
+}
+
+let elementPicker = null;
+
+function stopElementPicker() {
+  if (!elementPicker) {
+    return;
+  }
+  document.removeEventListener("mousemove", elementPicker.onMouseMove, true);
+  document.removeEventListener("click", elementPicker.onClick, true);
+  document.removeEventListener("keydown", elementPicker.onKeyDown, true);
+  elementPicker.highlight.remove();
+  elementPicker = null;
+}
+
+function startElementPicker(kind) {
+  stopElementPicker();
+
+  const highlight = document.createElement("div");
+  highlight.style.cssText =
+    "position:fixed;pointer-events:none;z-index:2147483647;" +
+    "background:rgba(59,130,246,0.25);border:2px solid #3b82f6;";
+  document.body.appendChild(highlight);
+
+  function onMouseMove(e) {
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    if (!el || el === highlight) {
+      return;
+    }
+    const rect = el.getBoundingClientRect();
+    highlight.style.left = `${rect.left}px`;
+    highlight.style.top = `${rect.top}px`;
+    highlight.style.width = `${rect.width}px`;
+    highlight.style.height = `${rect.height}px`;
+  }
+
+  function onClick(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = document.elementFromPoint(e.clientX, e.clientY);
+    const selector = el ? buildSelectorForElement(el) : null;
+    stopElementPicker();
+    chrome.runtime
+      .sendMessage({ type: "SELECTOR_PICKED", kind, selector })
+      .catch(() => {});
+    if (selector) {
+      showPickerToast(`✅ Picked ${kind} selector: ${selector}\nReopen the extension popup to see it.`);
+    } else {
+      showPickerToast("❌ Could not pick that element.");
+    }
+  }
+
+  function onKeyDown(e) {
+    if (e.key === "Escape") {
+      stopElementPicker();
+      chrome.runtime
+        .sendMessage({ type: "SELECTOR_PICKED", kind, selector: null, cancelled: true })
+        .catch(() => {});
+    }
+  }
+
+  document.addEventListener("mousemove", onMouseMove, true);
+  document.addEventListener("click", onClick, true);
+  document.addEventListener("keydown", onKeyDown, true);
+
+  elementPicker = { onMouseMove, onClick, onKeyDown, highlight };
+}
+
+chrome.runtime.onMessage.addListener((message) => {
+  if (!message || message.type !== "START_ELEMENT_PICKER") {
+    return undefined;
+  }
+  startElementPicker(message.kind);
+  return undefined;
 });
 
 })();

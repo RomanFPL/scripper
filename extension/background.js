@@ -373,6 +373,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return undefined;
   }
 
+  if (message.type === "SELECTOR_PICKED") {
+    chrome.storage.local.set({
+      pickerResult: {
+        kind: message.kind,
+        selector: message.selector,
+        cancelled: Boolean(message.cancelled),
+        ts: Date.now(),
+      },
+    });
+    return undefined;
+  }
+
   if (message.type === "SAVE_CHUNK") {
     appendChunk(message.sessionId, message.index, message.base64)
       .then(() => {

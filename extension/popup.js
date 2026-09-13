@@ -6,11 +6,17 @@ let loadedScenario = null;
 let sessions = [];
 let activeSessionId = null;
 let activeSessionRunning = false;
+let selectorHistory = [];
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const refreshButton = document.getElementById("refreshBtn");
 const collectButton = document.getElementById("collect");
+const itemSelectorInput = document.getElementById("itemSelector");
+const linkSelectorInput = document.getElementById("linkSelector");
+const pickItemButton = document.getElementById("pickItem");
+const pickLinkButton = document.getElementById("pickLink");
+const selectorHistorySelect = document.getElementById("selectorHistory");
 const sessionTabsEl = document.getElementById("sessionTabs");
 const sessionBlockEl = document.getElementById("sessionBlock");
 const videoListEl = document.getElementById("videoList");
@@ -550,9 +556,150 @@ async function sendToContentScript(tabId, scenario) {
   }
 }
 
+function buildCollectScenario() {
+  if (!loadedScenario) {
+    return null;
+  }
+
+  const selector = itemSelectorInput.value.trim();
+  const linkSelector = linkSelectorInput.value.trim();
+
+  const scenario = JSON.parse(JSON.stringify(loadedScenario));
+
+  scenario.steps = scenario.steps.map((step) => {
+    if (step.action !== "collectLinks") {
+      return step;
+    }
+    return {
+      ...step,
+      selector: selector || step.selector,
+      linkSelector: linkSelector || step.linkSelector,
+    };
+  });
+
+  return scenario;
+}
+
+async function saveSelectorToHistory(selector, linkSelector, hostname) {
+  const exists = selectorHistory.some(
+    (entry) => entry.selector === selector && entry.linkSelector === linkSelector
+  );
+
+  if (!exists) {
+    selectorHistory.unshift({ selector, linkSelector, hostname, ts: Date.now() });
+    selectorHistory = selectorHistory.slice(0, 20);
+    await chrome.storage.local.set({ selectorHistory });
+    renderSelectorHistory();
+  }
+}
+
+function renderSelectorHistory() {
+  selectorHistorySelect.innerHTML = "";
+
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent =
+    selectorHistory.length === 0 ? "— none saved —" : "— pick a saved selector —";
+  selectorHistorySelect.appendChild(placeholder);
+
+  selectorHistory.forEach((entry, i) => {
+    const option = document.createElement("option");
+    option.value = String(i);
+    option.textContent = `${entry.hostname}: ${entry.selector} / ${entry.linkSelector}`;
+    selectorHistorySelect.appendChild(option);
+  });
+}
+
+async function restoreSelectorHistory() {
+  const stored = await chrome.storage.local.get("selectorHistory");
+  if (Array.isArray(stored.selectorHistory)) {
+    selectorHistory = stored.selectorHistory;
+  }
+  renderSelectorHistory();
+}
+
+async function persistSelectorFields() {
+  await chrome.storage.local.set({
+    selectorFields: {
+      selector: itemSelectorInput.value,
+      linkSelector: linkSelectorInput.value,
+    },
+  });
+}
+
+async function restoreSelectorFields() {
+  const stored = await chrome.storage.local.get("selectorFields");
+  if (stored.selectorFields) {
+    itemSelectorInput.value = stored.selectorFields.selector || "";
+    linkSelectorInput.value = stored.selectorFields.linkSelector || "";
+  }
+}
+
+async function sendPickerStart(tabId, kind) {
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "START_ELEMENT_PICKER", kind });
+  } catch (error) {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ["content.js"],
+    });
+    await chrome.tabs.sendMessage(tabId, { type: "START_ELEMENT_PICKER", kind });
+  }
+}
+
+async function pickOnPage(kind) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+    if (!tab || !tab.id) {
+      throw new Error("No active tab.");
+    }
+
+    await sendPickerStart(tab.id, kind);
+
+    show(
+      `Click an element on the page to use as the ${kind === "item" ? "item" : "link"} selector (Esc to cancel).`
+    );
+  } catch (error) {
+    show(`ERROR:\n${error.message}`);
+    console.error("[Video Runner]", error);
+  }
+}
+
+async function applyPendingPickerResult() {
+  const stored = await chrome.storage.local.get("pickerResult");
+  const result = stored.pickerResult;
+
+  if (!result) {
+    return;
+  }
+
+  await chrome.storage.local.remove("pickerResult");
+
+  if (result.cancelled || !result.selector) {
+    return;
+  }
+
+  if (result.kind === "item") {
+    itemSelectorInput.value = result.selector;
+  } else if (result.kind === "link") {
+    linkSelectorInput.value = result.selector;
+  }
+
+  await persistSelectorFields();
+  show(`Picked ${result.kind} selector: ${result.selector}`);
+}
+
 async function collectVideos() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
+    return;
+  }
+
+  const scenario = buildCollectScenario();
+
+  if (!scenario.steps.some((step) => step.action === "collectLinks")) {
+    show('Loaded scenario has no "collectLinks" step.');
     return;
   }
 
@@ -569,7 +716,7 @@ async function collectVideos() {
       throw new Error("No active tab.");
     }
 
-    const response = await sendToContentScript(tab.id, loadedScenario);
+    const response = await sendToContentScript(tab.id, scenario);
 
     if (!response || !response.success) {
       throw new Error((response && response.error) || "Failed to collect links.");
@@ -582,10 +729,15 @@ async function collectVideos() {
     }
 
     let label = "Page";
+    let hostname = "page";
     try {
-      label = tab.title || new URL(tab.url).hostname || "Page";
+      hostname = new URL(tab.url).hostname;
+      label = tab.title || hostname || "Page";
     } catch (e) {}
     label = label.slice(0, 24);
+
+    const collectStep = scenario.steps.find((step) => step.action === "collectLinks");
+    await saveSelectorToHistory(collectStep.selector, collectStep.linkSelector, hostname);
 
     const session = {
       id: generateSessionId(),
@@ -727,7 +879,33 @@ concurrencyInput.addEventListener("change", () => {
   chrome.storage.local.set({ pipelineConcurrency: concurrency });
 });
 
+itemSelectorInput.addEventListener("change", persistSelectorFields);
+linkSelectorInput.addEventListener("change", persistSelectorFields);
+
+pickItemButton.addEventListener("click", () => pickOnPage("item"));
+pickLinkButton.addEventListener("click", () => pickOnPage("link"));
+
+selectorHistorySelect.addEventListener("change", () => {
+  const index = Number(selectorHistorySelect.value);
+  const entry = selectorHistory[index];
+  if (!entry) {
+    return;
+  }
+  itemSelectorInput.value = entry.selector;
+  linkSelectorInput.value = entry.linkSelector;
+  persistSelectorFields();
+});
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "local" && changes.pickerResult && changes.pickerResult.newValue) {
+    applyPendingPickerResult();
+  }
+});
+
 restoreConcurrency();
 restoreSessions();
+restoreSelectorFields();
+restoreSelectorHistory();
+applyPendingPickerResult();
 
 loadScenarioList();
