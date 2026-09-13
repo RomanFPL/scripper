@@ -429,14 +429,40 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.type === "PIPELINE_STOP") {
-    const control = getControl(message.pipelineSessionId);
+    const sessionId = message.pipelineSessionId;
+    const control = getControl(sessionId);
     control.stopped = true;
     control.paused = false;
-    setSessionPipelineState(message.pipelineSessionId, { paused: false });
+    setSessionPipelineState(sessionId, { paused: false });
     for (const tabId of control.currentTabIds) {
       chrome.tabs.remove(tabId).catch(() => {});
     }
-    broadcast(message.pipelineSessionId, { type: "PIPELINE_STATUS", stage: "stopping" });
+    broadcast(sessionId, { type: "PIPELINE_STATUS", stage: "stopping" });
+
+    setTimeout(() => {
+      if (!pipelineControls.has(sessionId)) {
+        return;
+      }
+
+      pipelineControls.delete(sessionId);
+      activePipelineCount = Math.max(0, activePipelineCount - 1);
+      if (activePipelineCount === 0) {
+        chrome.power.releaseKeepAwake();
+      }
+
+      setSessionPipelineState(sessionId, { running: false, paused: false });
+      broadcast(sessionId, {
+        type: "PIPELINE_STATUS",
+        stage: "stopped",
+        total: 0,
+        processed: 0,
+        succeeded: 0,
+        failed: 0,
+        results: [],
+        forced: true,
+      });
+    }, 8000);
+
     return undefined;
   }
 

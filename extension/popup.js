@@ -102,6 +102,10 @@ function formatPipelineStatus(message) {
     return `[Pipeline] All done: ${message.succeeded}/${message.total} succeeded, ${message.failed} failed.`;
   }
 
+  if (message.stage === "stopped" && message.forced) {
+    return "[Pipeline] ⏹ Force-stopped (some in-flight tabs didn't report back in time).";
+  }
+
   if (message.stage === "stopped") {
     return `[Pipeline] Stopped after ${message.processed}/${message.total} video(s): ${message.succeeded} succeeded, ${message.failed} failed.`;
   }
