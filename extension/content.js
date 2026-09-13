@@ -1,6 +1,8 @@
 if (!window.__videoRunnerLoaded) {
 window.__videoRunnerLoaded = true;
 
+(function () {
+
 const ACTIONS = {
   log(step) {
     console.log("[Video Runner]", step.message);
@@ -495,5 +497,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return true;
 });
+
+})();
 
 }

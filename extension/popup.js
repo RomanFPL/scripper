@@ -5,6 +5,7 @@ let scenarios = [];
 let loadedScenario = null;
 let sessions = [];
 let activeSessionId = null;
+let activeSessionRunning = false;
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
@@ -137,15 +138,22 @@ function applyPipelineState(state) {
   const running = Boolean(state && state.running);
   const paused = Boolean(state && state.paused);
 
+  activeSessionRunning = running;
+
   pauseButton.disabled = !running;
   stopButton.disabled = !running;
   pauseButton.textContent = paused ? "Resume" : "Pause";
   closeSessionButton.disabled = running;
+  selectAllButton.disabled = running;
+  selectNoneButton.disabled = running;
+
+  renderVideoList();
 }
 
 function updatePipelineButtonState() {
   const session = getActiveSession();
-  pipelineButton.disabled = !session || !session.videos.some((video) => video.selected);
+  const hasSelection = Boolean(session && session.videos.some((video) => video.selected));
+  pipelineButton.disabled = !hasSelection || activeSessionRunning;
 }
 
 function renderVideoList() {
@@ -163,6 +171,7 @@ function renderVideoList() {
     const checkbox = document.createElement("input");
     checkbox.type = "checkbox";
     checkbox.checked = video.selected;
+    checkbox.disabled = activeSessionRunning;
     checkbox.addEventListener("change", () => {
       session.videos[i].selected = checkbox.checked;
       if (checkbox.checked) {
