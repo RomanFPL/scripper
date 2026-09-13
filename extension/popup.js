@@ -3,16 +3,19 @@ const SCENARIOS_INDEX_URL =
 
 let scenarios = [];
 let loadedScenario = null;
-let collectedVideos = [];
+let sessions = [];
+let activeSessionId = null;
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
 const refreshButton = document.getElementById("refreshBtn");
 const collectButton = document.getElementById("collect");
-const videoListWrap = document.getElementById("videoListWrap");
+const sessionTabsEl = document.getElementById("sessionTabs");
+const sessionBlockEl = document.getElementById("sessionBlock");
 const videoListEl = document.getElementById("videoList");
 const selectAllButton = document.getElementById("selectAll");
 const selectNoneButton = document.getElementById("selectNone");
+const closeSessionButton = document.getElementById("closeSession");
 const pipelineButton = document.getElementById("pipeline");
 const pauseButton = document.getElementById("pause");
 const stopButton = document.getElementById("stop");
@@ -30,6 +33,14 @@ function show(message) {
     typeof message === "string"
       ? message
       : JSON.stringify(message, null, 2);
+}
+
+function generateSessionId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getActiveSession() {
+  return sessions.find((session) => session.id === activeSessionId) || null;
 }
 
 function formatHLSProgress(message) {
@@ -53,12 +64,8 @@ function formatHLSProgress(message) {
 }
 
 function formatPipelineStatus(message) {
-  if (message.stage === "collecting") {
-    return "[Pipeline] Collecting links...";
-  }
-
   if (message.stage === "collected") {
-    return `[Pipeline] Collected ${message.total} video(s). Starting downloads...`;
+    return `[Pipeline] Starting downloads for ${message.total} video(s)...`;
   }
 
   if (message.stage === "opening") {
@@ -126,20 +133,257 @@ function renderProgressLog(log) {
   progress.scrollTop = progress.scrollHeight;
 }
 
-async function restoreProgressLog() {
-  const stored = await chrome.storage.local.get("progressLog");
-  renderProgressLog(stored.progressLog);
+function applyPipelineState(state) {
+  const running = Boolean(state && state.running);
+  const paused = Boolean(state && state.paused);
+
+  pauseButton.disabled = !running;
+  stopButton.disabled = !running;
+  pauseButton.textContent = paused ? "Resume" : "Pause";
+  closeSessionButton.disabled = running;
 }
 
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.progressLog) {
+function updatePipelineButtonState() {
+  const session = getActiveSession();
+  pipelineButton.disabled = !session || !session.videos.some((video) => video.selected);
+}
+
+function renderVideoList() {
+  const session = getActiveSession();
+  videoListEl.innerHTML = "";
+
+  if (!session) {
+    updatePipelineButtonState();
     return;
   }
 
-  renderProgressLog(changes.progressLog.newValue);
-});
+  session.videos.forEach((video, i) => {
+    const label = document.createElement("label");
 
-restoreProgressLog();
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.checked = video.selected;
+    checkbox.addEventListener("change", () => {
+      session.videos[i].selected = checkbox.checked;
+      if (checkbox.checked) {
+        session.videos[i].progress = null;
+      }
+      persistSessions();
+      renderVideoList();
+    });
+
+    const span = document.createElement("span");
+    span.textContent = video.title;
+    span.title = video.url;
+
+    const bar = document.createElement("div");
+    bar.className = "video-progress-bar";
+
+    const fill = document.createElement("div");
+    fill.className = "video-progress-fill";
+    const percent = (video.progress && video.progress.percent) || 0;
+    fill.style.width = `${percent}%`;
+    if (video.progress && video.progress.done) {
+      fill.classList.add("done");
+    }
+    if (video.progress && video.progress.error) {
+      fill.classList.add("error");
+    }
+    bar.appendChild(fill);
+
+    label.appendChild(checkbox);
+    label.appendChild(span);
+    label.appendChild(bar);
+    videoListEl.appendChild(label);
+  });
+
+  updatePipelineButtonState();
+}
+
+function applyProgressToSession(session, log) {
+  if (!session || !Array.isArray(log)) {
+    return false;
+  }
+
+  const byUrl = {};
+  session.videos.forEach((video) => {
+    byUrl[video.url] = video;
+  });
+
+  let changed = false;
+
+  for (const entry of log) {
+    if (entry.type === "HLS_PROGRESS" && entry.videoUrl && byUrl[entry.videoUrl]) {
+      const video = byUrl[entry.videoUrl];
+
+      if (entry.stage === "segment" && entry.totalSegments > 0) {
+        const percent = Math.min(
+          100,
+          Math.round((entry.segment / entry.totalSegments) * 100)
+        );
+        if (!video.progress || video.progress.percent !== percent) {
+          video.progress = { percent, done: false };
+          changed = true;
+        }
+      }
+
+      if (entry.stage === "done") {
+        video.progress = { percent: 100, done: true };
+        if (video.selected) {
+          video.selected = false;
+        }
+        changed = true;
+      }
+    }
+
+    if (entry.type === "PIPELINE_STATUS" && entry.url && byUrl[entry.url]) {
+      const video = byUrl[entry.url];
+
+      if (entry.stage === "video-done") {
+        video.progress = { percent: 100, done: true };
+        if (video.selected) {
+          video.selected = false;
+        }
+        changed = true;
+      }
+
+      if (entry.stage === "video-error") {
+        video.progress = {
+          percent: (video.progress && video.progress.percent) || 0,
+          done: false,
+          error: true,
+        };
+        changed = true;
+      }
+    }
+  }
+
+  return changed;
+}
+
+function renderSessionTabs() {
+  sessionTabsEl.innerHTML = "";
+
+  sessions.forEach((session) => {
+    const tab = document.createElement("div");
+    tab.className = "session-tab" + (session.id === activeSessionId ? " active" : "");
+
+    const label = document.createElement("span");
+    label.textContent = session.label;
+    label.addEventListener("click", () => {
+      activeSessionId = session.id;
+      persistSessions();
+      renderSessionTabs();
+      renderActiveSession();
+    });
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "session-tab-close";
+    closeBtn.textContent = "×";
+    closeBtn.title = "Close this tab";
+    closeBtn.addEventListener("click", (event) => {
+      event.stopPropagation();
+      closeSession(session.id);
+    });
+
+    tab.appendChild(label);
+    tab.appendChild(closeBtn);
+    sessionTabsEl.appendChild(tab);
+  });
+
+  sessionBlockEl.hidden = sessions.length === 0;
+}
+
+async function renderActiveSession() {
+  const session = getActiveSession();
+
+  if (!session) {
+    renderVideoList();
+    renderProgressLog(null);
+    applyPipelineState(null);
+    return;
+  }
+
+  const stored = await chrome.storage.local.get(["sessionPipelineState", "sessionProgress"]);
+  const state = (stored.sessionPipelineState || {})[session.id];
+  const log = (stored.sessionProgress || {})[session.id];
+
+  if (applyProgressToSession(session, log)) {
+    await persistSessions();
+  }
+
+  renderVideoList();
+  applyPipelineState(state);
+  renderProgressLog(log);
+}
+
+async function persistSessions() {
+  await chrome.storage.local.set({ sessions, activeSessionId });
+}
+
+async function restoreSessions() {
+  const stored = await chrome.storage.local.get(["sessions", "activeSessionId"]);
+
+  if (Array.isArray(stored.sessions)) {
+    sessions = stored.sessions;
+  }
+
+  if (stored.activeSessionId && sessions.some((session) => session.id === stored.activeSessionId)) {
+    activeSessionId = stored.activeSessionId;
+  } else if (sessions.length > 0) {
+    activeSessionId = sessions[0].id;
+  }
+
+  renderSessionTabs();
+  await renderActiveSession();
+}
+
+async function closeSession(sessionId) {
+  const stored = await chrome.storage.local.get("sessionPipelineState");
+  const state = (stored.sessionPipelineState || {})[sessionId];
+
+  if (state && state.running) {
+    show("Stop the pipeline in this tab before closing it.");
+    return;
+  }
+
+  sessions = sessions.filter((session) => session.id !== sessionId);
+
+  if (activeSessionId === sessionId) {
+    activeSessionId = sessions.length > 0 ? sessions[0].id : null;
+  }
+
+  await persistSessions();
+  renderSessionTabs();
+  await renderActiveSession();
+}
+
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area !== "local") {
+    return;
+  }
+
+  const session = getActiveSession();
+  if (!session) {
+    return;
+  }
+
+  if (changes.sessionProgress) {
+    const log = (changes.sessionProgress.newValue || {})[session.id];
+
+    if (applyProgressToSession(session, log)) {
+      persistSessions();
+      renderVideoList();
+    }
+
+    renderProgressLog(log);
+  }
+
+  if (changes.sessionPipelineState) {
+    const state = (changes.sessionPipelineState.newValue || {})[session.id];
+    applyPipelineState(state);
+  }
+});
 
 async function persistScenarioState() {
   await chrome.storage.local.set({
@@ -297,50 +541,6 @@ async function sendToContentScript(tabId, scenario) {
   }
 }
 
-function updatePipelineButtonState() {
-  pipelineButton.disabled = !collectedVideos.some((video) => video.selected);
-}
-
-async function persistCollectedVideos() {
-  await chrome.storage.local.set({ collectedVideos });
-}
-
-function renderVideoList() {
-  videoListEl.innerHTML = "";
-
-  collectedVideos.forEach((video, i) => {
-    const label = document.createElement("label");
-
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.checked = video.selected;
-    checkbox.addEventListener("change", () => {
-      collectedVideos[i].selected = checkbox.checked;
-      persistCollectedVideos();
-      updatePipelineButtonState();
-    });
-
-    const span = document.createElement("span");
-    span.textContent = video.title;
-    span.title = video.url;
-
-    label.appendChild(checkbox);
-    label.appendChild(span);
-    videoListEl.appendChild(label);
-  });
-
-  videoListWrap.hidden = collectedVideos.length === 0;
-  updatePipelineButtonState();
-}
-
-async function restoreCollectedVideos() {
-  const stored = await chrome.storage.local.get("collectedVideos");
-  if (Array.isArray(stored.collectedVideos)) {
-    collectedVideos = stored.collectedVideos;
-    renderVideoList();
-  }
-}
-
 async function collectVideos() {
   if (!loadedScenario) {
     show('No scenario loaded. Load "Collect Video Links" first.');
@@ -372,12 +572,27 @@ async function collectVideos() {
       throw new Error("variables.videos is empty — nothing found on this page.");
     }
 
-    collectedVideos = videos.map((video) => ({ ...video, selected: true }));
-    await persistCollectedVideos();
-    renderVideoList();
+    let label = "Page";
+    try {
+      label = tab.title || new URL(tab.url).hostname || "Page";
+    } catch (e) {}
+    label = label.slice(0, 24);
+
+    const session = {
+      id: generateSessionId(),
+      label,
+      videos: videos.map((video) => ({ ...video, selected: true })),
+    };
+
+    sessions.push(session);
+    activeSessionId = session.id;
+
+    await persistSessions();
+    renderSessionTabs();
+    await renderActiveSession();
 
     show(
-      `Collected ${collectedVideos.length} video(s). Review the list and click "Download selected".`
+      `Collected ${session.videos.length} video(s) into tab "${label}". Review the list and click "Download selected".`
     );
   } catch (error) {
     show(`ERROR:\n${error.message}`);
@@ -389,7 +604,14 @@ async function collectVideos() {
 }
 
 async function startPipelineSelected() {
-  const selected = collectedVideos.filter((video) => video.selected);
+  const session = getActiveSession();
+
+  if (!session) {
+    show("No tab selected.");
+    return;
+  }
+
+  const selected = session.videos.filter((video) => video.selected);
 
   if (selected.length === 0) {
     show("No videos selected.");
@@ -403,14 +625,13 @@ async function startPipelineSelected() {
 
     await chrome.runtime.sendMessage({
       type: "START_PIPELINE",
+      pipelineSessionId: session.id,
       videos: selected,
       concurrency,
     });
 
-    await applyPipelineState({ running: true, paused: false });
-
     show(
-      `Pipeline started for ${selected.length} video(s) in background.js — it keeps running even if this popup closes.\nReopen the popup to see progress while it's still running.`
+      `Pipeline started for ${selected.length} video(s) in tab "${session.label}" — it keeps running even if this popup closes.`
     );
   } catch (error) {
     show(`ERROR:\n${error.message}`);
@@ -419,42 +640,40 @@ async function startPipelineSelected() {
   }
 }
 
-function applyPipelineState(state) {
-  const running = Boolean(state && state.running);
-  const paused = Boolean(state && state.paused);
-
-  pauseButton.disabled = !running;
-  stopButton.disabled = !running;
-  pauseButton.textContent = paused ? "Resume" : "Pause";
-}
-
 async function togglePause() {
-  const stored = await chrome.storage.local.get("pipelineState");
-  const paused = Boolean(stored.pipelineState && stored.pipelineState.paused);
+  const session = getActiveSession();
+  if (!session) {
+    return;
+  }
+
+  const stored = await chrome.storage.local.get("sessionPipelineState");
+  const state = (stored.sessionPipelineState || {})[session.id];
+  const paused = Boolean(state && state.paused);
 
   await chrome.runtime.sendMessage({
     type: paused ? "PIPELINE_RESUME" : "PIPELINE_PAUSE",
+    pipelineSessionId: session.id,
   });
 }
 
 async function stopPipeline() {
-  await chrome.runtime.sendMessage({ type: "PIPELINE_STOP" });
-}
-
-async function restorePipelineState() {
-  const stored = await chrome.storage.local.get("pipelineState");
-  applyPipelineState(stored.pipelineState);
-}
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local" || !changes.pipelineState) {
+  const session = getActiveSession();
+  if (!session) {
     return;
   }
 
-  applyPipelineState(changes.pipelineState.newValue);
-});
+  await chrome.runtime.sendMessage({
+    type: "PIPELINE_STOP",
+    pipelineSessionId: session.id,
+  });
+}
 
-restorePipelineState();
+async function restoreConcurrency() {
+  const stored = await chrome.storage.local.get("pipelineConcurrency");
+  if (stored.pipelineConcurrency) {
+    concurrencyInput.value = stored.pipelineConcurrency;
+  }
+}
 
 scenarioSelect.addEventListener("change", () => {
   loadedScenario = null;
@@ -472,14 +691,18 @@ refreshButton.addEventListener("click", loadScenarioList);
 collectButton.addEventListener("click", collectVideos);
 
 selectAllButton.addEventListener("click", () => {
-  collectedVideos.forEach((video) => (video.selected = true));
-  persistCollectedVideos();
+  const session = getActiveSession();
+  if (!session) return;
+  session.videos.forEach((video) => (video.selected = true));
+  persistSessions();
   renderVideoList();
 });
 
 selectNoneButton.addEventListener("click", () => {
-  collectedVideos.forEach((video) => (video.selected = false));
-  persistCollectedVideos();
+  const session = getActiveSession();
+  if (!session) return;
+  session.videos.forEach((video) => (video.selected = false));
+  persistSessions();
   renderVideoList();
 });
 
@@ -495,14 +718,7 @@ concurrencyInput.addEventListener("change", () => {
   chrome.storage.local.set({ pipelineConcurrency: concurrency });
 });
 
-async function restoreConcurrency() {
-  const stored = await chrome.storage.local.get("pipelineConcurrency");
-  if (stored.pipelineConcurrency) {
-    concurrencyInput.value = stored.pipelineConcurrency;
-  }
-}
-
 restoreConcurrency();
-restoreCollectedVideos();
+restoreSessions();
 
 loadScenarioList();

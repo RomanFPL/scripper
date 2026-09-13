@@ -83,29 +83,35 @@ const ACTIONS = {
   async downloadHLS(step, variables) {
     const titleValue = step.title || variables[step.titleVar || "title"];
     const videoLabel = titleValue || step.url || "video";
+    const pipelineSessionId = step.pipelineSessionId;
+    const videoUrl = step.videoUrl;
     let playlistUrl = step.url || variables[step.urlVar || "url"];
 
-    reportHLSProgress({ stage: "start", video: videoLabel });
+    const report = (data) =>
+      reportHLSProgress({ ...data, pipelineSessionId, videoUrl });
+
+    report({ stage: "start", video: videoLabel });
 
     if (!playlistUrl) {
-      reportHLSProgress({ stage: "detect-m3u8", video: videoLabel });
+      report({ stage: "detect-m3u8", video: videoLabel });
       const found = await findM3U8Urls();
       if (found.length === 0) {
         throw new Error("m3u8 playlist not found on the page");
       }
-      reportHLSProgress({ stage: "candidates", video: videoLabel, candidates: found });
+      report({ stage: "candidates", video: videoLabel, candidates: found });
       playlistUrl = found[0];
     }
 
-    reportHLSProgress({ stage: "playlist", video: videoLabel, url: playlistUrl });
+    report({ stage: "playlist", video: videoLabel, url: playlistUrl });
 
     let playlistText = await fetchWithRetry(playlistUrl, {
       label: "playlist",
       video: videoLabel,
+      pipelineSessionId,
       as: "text",
     });
 
-    reportHLSProgress({
+    report({
       stage: "playlist-preview",
       video: videoLabel,
       url: playlistUrl,
@@ -121,7 +127,7 @@ const ACTIONS = {
     let playlistBase = new URL("./", playlistUrl);
 
     if (playlistText.includes("#EXT-X-STREAM-INF")) {
-      reportHLSProgress({ stage: "master-playlist", video: videoLabel });
+      report({ stage: "master-playlist", video: videoLabel });
 
       const lines = playlistText.split(/\r?\n/);
       let bestBandwidth = -1;
@@ -154,7 +160,7 @@ const ACTIONS = {
 
       playlistUrl = new URL(bestUri, playlistBase).href;
 
-      reportHLSProgress({
+      report({
         stage: "variant-selected",
         video: videoLabel,
         url: playlistUrl,
@@ -164,6 +170,7 @@ const ACTIONS = {
       playlistText = await fetchWithRetry(playlistUrl, {
         label: "media playlist",
         video: videoLabel,
+        pipelineSessionId,
         as: "text",
       });
       playlistBase = new URL("./", playlistUrl);
@@ -190,34 +197,35 @@ const ACTIONS = {
     let mimeType = "video/mp4";
     let partIndex = 0;
 
-    const sessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    const uploadSessionId = `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 
     try {
       if (mapMatch) {
         const initUrl = new URL(mapMatch[1], playlistBase).href;
 
-        reportHLSProgress({ stage: "init", video: videoLabel, url: initUrl });
+        report({ stage: "init", video: videoLabel, url: initUrl });
 
         const initBuffer = await fetchWithRetry(initUrl, {
           label: "init segment",
           video: videoLabel,
+          pipelineSessionId,
         });
 
-        await sendChunk(sessionId, partIndex, initBuffer);
+        await sendChunk(uploadSessionId, partIndex, initBuffer);
         partIndex++;
         bytesDownloaded += initBuffer.byteLength;
       } else {
         outputExt = "ts";
         mimeType = "video/mp2t";
 
-        reportHLSProgress({
+        report({
           stage: "no-init",
           video: videoLabel,
           message: "No #EXT-X-MAP — treating segments as plain MPEG-TS",
         });
       }
 
-      reportHLSProgress({
+      report({
         stage: "segment",
         video: videoLabel,
         segment: 0,
@@ -229,13 +237,14 @@ const ACTIONS = {
         const buffer = await fetchWithRetry(segmentUrls[i], {
           label: `segment ${i + 1}/${segmentUrls.length}`,
           video: videoLabel,
+          pipelineSessionId,
         });
 
-        await sendChunk(sessionId, partIndex, buffer);
+        await sendChunk(uploadSessionId, partIndex, buffer);
         partIndex++;
         bytesDownloaded += buffer.byteLength;
 
-        reportHLSProgress({
+        report({
           stage: "segment",
           video: videoLabel,
           segment: i + 1,
@@ -249,7 +258,7 @@ const ACTIONS = {
         outputExt
       );
 
-      reportHLSProgress({
+      report({
         stage: "saving",
         video: videoLabel,
         filename,
@@ -258,7 +267,7 @@ const ACTIONS = {
 
       const saveResponse = await chrome.runtime.sendMessage({
         type: "SAVE_FILE_FINALIZE",
-        sessionId,
+        sessionId: uploadSessionId,
         filename,
         mimeType,
       });
@@ -269,7 +278,7 @@ const ACTIONS = {
         );
       }
 
-      reportHLSProgress({
+      report({
         stage: "done",
         video: videoLabel,
         filename,
@@ -285,7 +294,9 @@ const ACTIONS = {
         downloadId: saveResponse.downloadId,
       };
     } catch (err) {
-      chrome.runtime.sendMessage({ type: "SAVE_FILE_ABORT", sessionId }).catch(() => {});
+      chrome.runtime
+        .sendMessage({ type: "SAVE_FILE_ABORT", sessionId: uploadSessionId })
+        .catch(() => {});
       throw err;
     }
   },
@@ -343,6 +354,7 @@ async function findM3U8Urls() {
 async function fetchWithRetry(url, {
   label = "",
   video = "",
+  pipelineSessionId,
   retries = 3,
   delayMs = 1000,
   timeoutMs = 30000,
@@ -375,6 +387,7 @@ async function fetchWithRetry(url, {
         attempt,
         retries,
         error: lastError.message,
+        pipelineSessionId,
       });
       if (attempt < retries) {
         await sleep(delayMs * attempt);
