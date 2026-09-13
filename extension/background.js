@@ -178,62 +178,67 @@ async function runPipelineAllVideos(listTabId, listScenario) {
 
   await chrome.storage.local.set({ progressLog: [] });
   await setPipelineState({ running: true, paused: false });
+  chrome.power.requestKeepAwake("system");
   broadcast({ type: "PIPELINE_STATUS", stage: "collecting" });
 
-  const listResponse = await sendToContentScript(listTabId, listScenario);
+  try {
+    const listResponse = await sendToContentScript(listTabId, listScenario);
 
-  if (!listResponse || !listResponse.success) {
-    throw new Error(
-      (listResponse && listResponse.error) || "Failed to collect links."
-    );
-  }
-
-  const videos = listResponse.variables.videos;
-
-  if (!Array.isArray(videos) || videos.length === 0) {
-    throw new Error("variables.videos is empty — nothing to download.");
-  }
-
-  broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
-
-  const results = [];
-  let stoppedEarly = false;
-
-  for (let i = 0; i < videos.length; i++) {
-    if (pipelineControl.stopped) {
-      stoppedEarly = true;
-      break;
+    if (!listResponse || !listResponse.success) {
+      throw new Error(
+        (listResponse && listResponse.error) || "Failed to collect links."
+      );
     }
 
-    await waitWhilePaused();
+    const videos = listResponse.variables.videos;
 
-    if (pipelineControl.stopped) {
-      stoppedEarly = true;
-      break;
+    if (!Array.isArray(videos) || videos.length === 0) {
+      throw new Error("variables.videos is empty — nothing to download.");
     }
 
-    const result = await downloadOneVideo(videos[i], i + 1, videos.length);
-    results.push(result);
+    broadcast({ type: "PIPELINE_STATUS", stage: "collected", total: videos.length });
 
-    if (i < videos.length - 1) {
-      await sleep(1000);
+    const results = [];
+    let stoppedEarly = false;
+
+    for (let i = 0; i < videos.length; i++) {
+      if (pipelineControl.stopped) {
+        stoppedEarly = true;
+        break;
+      }
+
+      await waitWhilePaused();
+
+      if (pipelineControl.stopped) {
+        stoppedEarly = true;
+        break;
+      }
+
+      const result = await downloadOneVideo(videos[i], i + 1, videos.length);
+      results.push(result);
+
+      if (i < videos.length - 1) {
+        await sleep(1000);
+      }
     }
+
+    const succeeded = results.filter((r) => r.success).length;
+    const failed = results.length - succeeded;
+
+    await setPipelineState({ running: false, paused: false });
+
+    broadcast({
+      type: "PIPELINE_STATUS",
+      stage: stoppedEarly ? "stopped" : "done",
+      total: videos.length,
+      processed: results.length,
+      succeeded,
+      failed,
+      results,
+    });
+  } finally {
+    chrome.power.releaseKeepAwake();
   }
-
-  const succeeded = results.filter((r) => r.success).length;
-  const failed = results.length - succeeded;
-
-  await setPipelineState({ running: false, paused: false });
-
-  broadcast({
-    type: "PIPELINE_STATUS",
-    stage: stoppedEarly ? "stopped" : "done",
-    total: videos.length,
-    processed: results.length,
-    succeeded,
-    failed,
-    results,
-  });
 }
 
 async function ensureOffscreenDocument() {
