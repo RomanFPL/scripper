@@ -7,7 +7,6 @@ let collectedVideos = [];
 
 const scenarioSelect = document.getElementById("scenario");
 const loadButton = document.getElementById("load");
-const runButton = document.getElementById("run");
 const refreshButton = document.getElementById("refreshBtn");
 const collectButton = document.getElementById("collect");
 const videoListWrap = document.getElementById("videoListWrap");
@@ -204,7 +203,6 @@ async function loadScenarioList() {
         savedState.loadedScenario.__file === savedState.selectedFile
       ) {
         loadedScenario = savedState.loadedScenario;
-        runButton.disabled = false;
       }
     }
 
@@ -268,14 +266,11 @@ async function loadSelectedScenario() {
 
     loadedScenario.__file = file;
 
-    runButton.disabled = false;
-
     show(loadedScenario);
 
     await persistScenarioState();
   } catch (error) {
     loadedScenario = null;
-    runButton.disabled = true;
 
     show(`ERROR:\n${error.message}`);
 
@@ -299,46 +294,6 @@ async function sendToContentScript(tabId, scenario) {
       type: "RUN_SCENARIO",
       scenario,
     });
-  }
-}
-
-async function runSelectedScenario() {
-  if (!loadedScenario) {
-    show('No scenario loaded. Click "Load scenario" first.');
-    return;
-  }
-
-  runButton.disabled = true;
-
-  show("Running scenario...");
-
-  try {
-    const [tab] = await chrome.tabs.query({
-      active: true,
-      currentWindow: true,
-    });
-
-    if (!tab || !tab.id) {
-      throw new Error("No active tab.");
-    }
-
-    const response = await sendToContentScript(tab.id, loadedScenario);
-
-    if (!response) {
-      throw new Error("No response from content script.");
-    }
-
-    if (!response.success) {
-      throw new Error(response.error || "Scenario failed.");
-    }
-
-    show(response.variables);
-  } catch (error) {
-    show(`ERROR:\n${error.message}`);
-
-    console.error("[Video Runner]", error);
-  } finally {
-    runButton.disabled = false;
   }
 }
 
@@ -503,7 +458,6 @@ restorePipelineState();
 
 scenarioSelect.addEventListener("change", () => {
   loadedScenario = null;
-  runButton.disabled = true;
 
   output.textContent =
     'No scenario loaded. Click "Load scenario" first.';
@@ -512,8 +466,6 @@ scenarioSelect.addEventListener("change", () => {
 });
 
 loadButton.addEventListener("click", loadSelectedScenario);
-
-runButton.addEventListener("click", runSelectedScenario);
 
 refreshButton.addEventListener("click", loadScenarioList);
 
